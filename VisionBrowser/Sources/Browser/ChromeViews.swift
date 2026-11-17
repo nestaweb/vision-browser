@@ -26,72 +26,127 @@ final class TrafficLightZone: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// Indicateur de domaine (F1) : une pastille discrète qui apparaît 1,5 s puis s'efface.
+/// Étiquette du haut (F1, direction « Scène ») : l'espace et le site, annoncés brièvement à chaque changement,
+/// et les messages courts (« Rempli », « Copié »…).
+///
+/// Sobre : une petite capsule claire, un trait de la couleur de l'espace, le texte. Le symbole est monochrome ;
+/// seuls les avertissements (rouge, orange : site non sécurisé, échec) gardent une couleur, la brique sourde.
+/// Elle descend du haut et y remonte ; si un nouveau message arrive pendant qu'elle est affichée, seul le texte change.
 @MainActor
-final class DomainToastView: NSVisualEffectView {
+final class DomainToastView: NSView {
+    private let spaceMark = NSView()
+    private let spaceLabel = NSTextField(labelWithString: "")
+    private let separator = NSView()
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private let spaceDot = NSView()
-    private let spaceLabel = NSTextField(labelWithString: "")
+    private var stack: NSStackView!
     private var hideTask: Task<Void, Never>?
+    private var isShown = false
 
     init() {
         super.init(frame: .zero)
-        material = .hudWindow
-        blendingMode = .withinWindow
-        state = .active
         wantsLayer = true
-        layer?.cornerRadius = 13
+        layer?.backgroundColor = Design.Palette.sheet.withAlphaComponent(0.94).cgColor
+        layer?.cornerRadius = 14
+        layer?.borderWidth = 0.5
+        layer?.borderColor = Design.Palette.ink.withAlphaComponent(0.14).cgColor
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.10
+        layer?.shadowRadius = 8
+        layer?.shadowOffset = CGSize(width: 0, height: -3)
         alphaValue = 0
-        label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
-        label.textColor = .labelColor
-        icon.symbolConfiguration = .init(pointSize: 11, weight: .semibold)
-        spaceDot.wantsLayer = true
-        spaceDot.layer?.cornerRadius = 4
-        spaceDot.translatesAutoresizingMaskIntoConstraints = false
-        spaceDot.widthAnchor.constraint(equalToConstant: 8).isActive = true
-        spaceDot.heightAnchor.constraint(equalToConstant: 8).isActive = true
-        spaceLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        spaceLabel.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [icon, label, spaceDot, spaceLabel])
-        stack.setCustomSpacing(12, after: label)
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 12)
+        isHidden = true
+
+        spaceMark.wantsLayer = true
+        spaceMark.layer?.cornerRadius = 1.5
+        spaceMark.translatesAutoresizingMaskIntoConstraints = false
+        spaceLabel.font = .systemFont(ofSize: Design.Typography.smallSize, weight: .semibold)
+        spaceLabel.textColor = Design.Palette.ink
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = Design.Palette.rule.cgColor
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        icon.symbolConfiguration = .init(pointSize: 10, weight: .semibold)
+        label.font = Design.Typography.small
+        label.textColor = Design.Palette.ink(.secondary)
+
+        stack = NSStackView(views: [spaceMark, spaceLabel, separator, icon, label])
+        stack.spacing = 7
+        stack.setCustomSpacing(10, after: spaceLabel)
+        stack.setCustomSpacing(10, after: separator)
+        stack.setCustomSpacing(5, after: icon)
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 13)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
             stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            spaceMark.widthAnchor.constraint(equalToConstant: 3), spaceMark.heightAnchor.constraint(equalToConstant: 11),
+            separator.widthAnchor.constraint(equalToConstant: 1), separator.heightAnchor.constraint(equalToConstant: 12),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("non utilisé") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    /// Couleur du symbole : monochrome, sauf les avertissements (rouge, orange) en brique sourde.
+    static func symbolColor(for tint: NSColor) -> NSColor {
+        tint == .systemRed || tint == .systemOrange ? Design.Palette.space(7) : Design.Palette.ink(.secondary)
+    }
+
     /// - Parameter space: nom et couleur de l'espace à rappeler (deux comptes Zoho se ressemblent).
     /// - Parameter duration: durée d'affichage ; un message d'attente reste jusqu'au message suivant.
     func show(text: String, symbol: String, tint: NSColor, space: (name: String, color: NSColor)? = nil,
               duration: Duration = .milliseconds(1500)) {
-        label.stringValue = text
-        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        icon.contentTintColor = tint
-        spaceDot.isHidden = space == nil
-        spaceLabel.isHidden = space == nil
-        spaceDot.layer?.backgroundColor = space?.color.cgColor
-        spaceLabel.stringValue = space?.name ?? ""
-        let view = self
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
-            MainActor.assumeIsolated { view.animator().alphaValue = 1 }
+        let update = {
+            self.label.stringValue = text
+            self.icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            self.icon.contentTintColor = Self.symbolColor(for: tint)
+            for view in [self.spaceMark, self.spaceLabel, self.separator] { view.isHidden = space == nil }
+            self.spaceMark.layer?.backgroundColor = space?.color.cgColor
+            self.spaceLabel.stringValue = space?.name ?? ""
+        }
+        if isShown {
+            // Déjà affichée : le texte change sur place (fondu court), elle ne redescend pas.
+            Design.Motion.animate(.fast, { self.stack.animator().alphaValue = 0 }) { [weak self] in
+                guard let self else { return }
+                update()
+                Design.Motion.animate(.fast) { self.stack.animator().alphaValue = 1 }
+            }
+        } else {
+            update()
+            stack.alphaValue = 1
+            isHidden = false
+            isShown = true
+            slide(fromAbove: true)
         }
         hideTask?.cancel()
         hideTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self else { return }
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.4
-                MainActor.assumeIsolated { self.animator().alphaValue = 0 }
-            }, completionHandler: nil)
+            self.isShown = false
+            self.slide(fromAbove: false)
+        }
+    }
+
+    /// Descend du haut (ou y remonte) en fondu ; « Réduire les animations » : fondu seul.
+    private func slide(fromAbove appearing: Bool) {
+        let distance: CGFloat = 36
+        if Design.Motion.allowsMovement(), let layer {
+            let move = CABasicAnimation(keyPath: "transform")
+            // La fenêtre n'est pas retournée : dans le repère du calque, y monte.
+            move.fromValue = CATransform3DMakeTranslation(0, appearing ? distance : 0, 0)
+            move.toValue = CATransform3DMakeTranslation(0, appearing ? 0 : distance, 0)
+            move.duration = Design.Motion.duration(.medium)
+            move.timingFunction = Design.Motion.curve
+            move.fillMode = .forwards
+            move.isRemovedOnCompletion = appearing
+            layer.add(move, forKey: "vision.slide")
+        }
+        Design.Motion.animate(.medium, { self.animator().alphaValue = appearing ? 1 : 0 }) { [weak self] in
+            guard let self, !appearing, !self.isShown else { return }
+            self.isHidden = true
+            self.layer?.removeAnimation(forKey: "vision.slide")
         }
     }
 }

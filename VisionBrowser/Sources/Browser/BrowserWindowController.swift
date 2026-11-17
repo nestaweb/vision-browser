@@ -49,6 +49,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var sceneOrigin: (space: Space, tab: BrowserTab?)?
     private let switcher = TabSwitcherView()
     private var switcherWidth: NSLayoutConstraint?
+    /// Distance de l'étiquette du haut au bord : agrandie en plein écran pour passer sous l'encoche.
+    private var toastTop: NSLayoutConstraint?
     private var switcherHeight: NSLayoutConstraint?
     /// Point d'ancrage du popup Bitwarden (coin supérieur droit).
     let popupAnchor = PassthroughView()
@@ -158,11 +160,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         insecureStripe.layer?.backgroundColor = NSColor.systemRed.cgColor
         insecureStripe.isHidden = true
 
-        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, shelf, overview, switcher, domainToast, veil, commandBar,
+        // L'étiquette du haut passe au-dessus du voile de la barre Cmd+T (sinon elle paraît grisée).
+        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, shelf, overview, switcher, veil, domainToast, commandBar,
                      trafficLightZone, popupAnchor] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
+        toastTop = domainToast.topAnchor.constraint(equalTo: content.topAnchor, constant: 12)
         let switcherWidth = switcher.widthAnchor.constraint(equalToConstant: 400)
         let switcherHeight = switcher.heightAnchor.constraint(equalToConstant: 190)
         self.switcherWidth = switcherWidth
@@ -203,7 +207,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             switcher.centerYAnchor.constraint(equalTo: content.centerYAnchor),
             switcherWidth, switcherHeight,
 
-            domainToast.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
+            toastTop!,
             domainToast.centerXAnchor.constraint(equalTo: content.centerXAnchor),
 
             // Au quart de la hauteur : la liste a la place de se dérouler dessous.
@@ -972,7 +976,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard commandBar.isOpen else { return }
         commandBar.dismiss()
         setBarBackdrop(visible: false)
-        if let webView = displayedTab?.liveWebView { window?.makeFirstResponder(webView) }
+        // Sans page (espace vide), le clavier revient à la fenêtre : sinon il reste dans le champ caché
+        // (la frappe se perd, et ⇧← ⇧→ sont désactivés comme dans un champ de texte).
+        if let webView = displayedTab?.liveWebView { window?.makeFirstResponder(webView) } else { window?.makeFirstResponder(nil) }
     }
 
     /// Derrière la barre : la page recule d'un pas (98,5 %) et un voile uni se pose dessus.
@@ -1429,6 +1435,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) { host.controller.didFocusWindow(self) }
+    func windowDidEnterFullScreen(_ notification: Notification) { updateToastInset() }
+    func windowDidExitFullScreen(_ notification: Notification) { updateToastInset() }
+    func windowDidChangeScreen(_ notification: Notification) { updateToastInset() }
+
+    /// En plein écran sur un Mac à encoche, la fenêtre peut monter jusque derrière l'encoche :
+    /// l'étiquette descend alors d'autant, pour rester lisible (rien d'interactif ne se place sous l'encoche).
+    private func updateToastInset() {
+        guard let window, let screen = window.screen else { return }
+        let safeTop = screen.frame.maxY - screen.safeAreaInsets.top
+        toastTop?.constant = 12 + max(0, window.frame.maxY - safeTop)
+    }
     func windowDidResignKey(_ notification: Notification) {
         cancelSwitcher()
         hideShelf()
