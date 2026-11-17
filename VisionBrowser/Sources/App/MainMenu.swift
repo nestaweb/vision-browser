@@ -34,6 +34,8 @@ enum MainMenu {
         move.isEnabled = !others.isEmpty
         menu.addItem(move)
         menu.addItem(item("Toujours ouvrir ce site dans cet espace", #selector(BrowserWindowController.routeHostHereAction(_:))))
+        menu.addItem(.separator())
+        menu.addItem(bitwardenFolderMenu(for: browser))
     }
 
     static func build() -> NSMenu {
@@ -110,6 +112,29 @@ enum MainMenu {
         NSApp.windowsMenu = window.submenu
         main.addItem(window)
         return main
+    }
+
+    /// « Dossier Bitwarden » : quel dossier du coffre correspond à l'espace affiché (F6).
+    private static func bitwardenFolderMenu(for browser: BrowserWindowController) -> NSMenuItem {
+        let service = BitwardenService.shared
+        guard service.isUnlocked else {
+            let locked = NSMenuItem(title: "Dossier Bitwarden (déverrouille Bitwarden pour choisir)", action: nil, keyEquivalent: "")
+            locked.isEnabled = false
+            return locked
+        }
+        let linked = browser.config.space(browser.currentSpace.id)?.bitwardenFolderID
+        let sameName = service.vault.folders.first { BitwardenVault.sameName($0.name, browser.currentSpace.name) }
+        let automatic = item(sameName.map { "Automatique (dossier « \($0.name) »)" } ?? "Automatique (aucun dossier de ce nom)",
+                             #selector(BrowserWindowController.linkBitwardenFolderAction(_:)))
+        automatic.state = linked == nil ? .on : .off
+        var entries = [automatic, NSMenuItem.separator()]
+        for folder in service.vault.folders {
+            let entry = item(folder.name, #selector(BrowserWindowController.linkBitwardenFolderAction(_:)))
+            entry.representedObject = folder.id
+            entry.state = linked == folder.id ? .on : .off
+            entries.append(entry)
+        }
+        return submenu("Dossier Bitwarden de l'espace", entries)
     }
 
     /// Ajoute les commandes de l'extension (ex. remplissage ⇧⌘L) à son menu, avec leurs raccourcis.

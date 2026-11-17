@@ -65,6 +65,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var overviewOpening = false
     /// Ordre d'empilement des pages : la dernière affichée passe devant.
     private var pageLayerOrder = 0
+    /// Remplissages Bitwarden en attente du chargement de leur onglet (mot de passe gardé au plus 3 min).
+    private var pendingFills: [UUID: PendingFill] = [:]
+    private struct PendingFill {
+        var item: BitwardenItem
+        var username: String?
+        var password: String?
+        var expires: Date
+    }
 
     init(host: ExtensionHost, session: SessionStore, spacesStore: SpacesStore) {
         self.host = host
@@ -91,9 +99,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         DownloadManager.shared.onFinished = { [weak self] url in
             self?.domainToast.show(text: "Téléchargé : \(url.lastPathComponent)", symbol: "arrow.down.circle.fill", tint: .systemBlue)
         }
-        CopyRelay.shared.onCopy = { [weak self] webView in
+        CopyRelay.shared.onCopy = { [weak self] webView, fromExtension in
             let tab = self?.allTabs.first { $0.liveWebView === webView }
-            ClipboardMonitor.shared.checkSoon(source: DomainPolicy.displayHost(for: tab?.url))
+            ClipboardMonitor.shared.checkSoon(source: fromExtension ? "Bitwarden" : DomainPolicy.displayHost(for: tab?.url),
+                                              fromExtension: fromExtension)
+        }
+        BitwardenService.shared.onChange = { [weak self] in
+            guard let self else { return }
+            self.onSpacesChanged?()
+            if !self.commandBar.isHidden { self.refreshResults(for: self.commandBar.query, keepSelection: true) }
         }
         ClipboardMonitor.shared.onChange = { [weak self] in
             guard let self, !self.commandBar.isHidden else { return }
@@ -502,6 +516,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Page chargée : sa carte est rafraîchie peu après (le temps que la page se dessine).
     func tabDidFinishLoading(_ tab: BrowserTab) {
+        if let fill = pendingFills[tab.id] {
+            if fill.expires < Date() { pendingFills[tab.id] = nil } else { runFill(fill, in: tab) }
+        }
         guard tab === displayedTab else { return }
         Task { [weak tab] in
             try? await Task.sleep(for: .milliseconds(600))
@@ -854,6 +871,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func showCommandBar(newTab: Bool) {
         hideShelf()
         if !overview.isHidden { overview.isHidden = true }
+        // L'état de la CLI a pu changer (bw login fait dans le Terminal) : vérifié en arrière-plan.
+        if !BitwardenService.shared.isUnlocked { Task { await BitwardenService.shared.refreshStatus() } }
         commandBar.present(text: newTab ? "" : (activeTab?.url?.absoluteString ?? ""), newTab: newTab)
         window?.makeFirstResponder(commandBar.field)
         refreshResults(for: commandBar.query)
@@ -875,7 +894,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
                      activeIsFavorite: url.map { places?.isFavorite($0) ?? false } ?? false,
                      spaces: spaces.map { .init(id: $0.id, name: $0.name) },
                      currentSpaceID: currentSpace.id,
-                     routedSpaceForActiveHost: url.flatMap { config.spaceID(for: $0) })
+                     routedSpaceForActiveHost: url.flatMap { config.spaceID(for: $0) },
+                     bitwarden: BitwardenService.shared.status)
     }
 
     /// Résultats locaux immédiatement, puis suggestions du moteur de recherche dès qu'elles arrivent.
@@ -893,8 +913,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func localResults(for query: String, suggestions: [String] = []) -> [CommandResult] {
-        engine.results(for: query, tabs: openTabInfos, context: commandContext, suggestions: suggestions,
-                       archived: archived, clipboard: ClipboardMonitor.shared.history)
+        let bitwarden = BitwardenService.shared
+        let entries = bitwarden.isUnlocked ? bitwarden.vault.search(query, config: config, currentSpaceID: currentSpace.id) : []
+        return engine.results(for: query, tabs: openTabInfos, context: commandContext, suggestions: suggestions,
+                              archived: archived, clipboard: ClipboardMonitor.shared.history, bitwarden: entries)
     }
 
     /// Presse-papier : Entrée ouvre un lien ou colle dans le champ actif de la page ;
@@ -936,6 +958,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             reopenArchived(id)
         case .clipboard(let id, _, _):
             useClipboardItem(id, copyOnly: invert)
+        case .bitwarden(let id, _):
+            useBitwardenItem(id, copyOnly: invert)
+        case .command(.unlockBitwarden):
+            unlockBitwardenAction(nil)
+        case .command(.lockBitwarden):
+            BitwardenService.shared.lock()
+            domainToast.show(text: "Bitwarden verrouillé", symbol: "lock.fill", tint: .systemBlue)
+        case .command(.setupBitwarden):
+            showBitwardenSetup()
         case .command(.copyAddress):
             guard let url = activeTab?.url else { return }
             NSPasteboard.general.clearContents()
@@ -965,6 +996,122 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard let tab = activeTab, let url = tab.url, let places else { return }
         let added = places.toggleFavorite(url: url, title: tab.title)
         domainToast.show(text: added ? "Ajouté aux favoris" : "Retiré des favoris", symbol: added ? "star.fill" : "star.slash", tint: .systemYellow)
+    }
+
+    // MARK: Bitwarden (CLI)
+
+    /// Entrée : ouvre le site dans l'espace de l'identifiant et le remplit. Cmd+Entrée : copie le mot de passe
+    /// (masqué dans l'historique, effacé du presse-papier après 90 s). Touch ID d'abord.
+    private func useBitwardenItem(_ id: String, copyOnly: Bool) {
+        let service = BitwardenService.shared
+        guard let item = service.vault.items.first(where: { $0.id == id }) else { return }
+        Task { [weak self] in
+            let reason = copyOnly ? "copier le mot de passe « \(item.name) »" : "remplir l'identifiant « \(item.name) »"
+            guard await service.authenticate(reason: reason) else { return }
+            let credentials: (username: String?, password: String?)
+            do { credentials = try await service.credentials(for: id) } catch {
+                self?.showError("Bitwarden", error)
+                return
+            }
+            guard let self else { return }
+            if copyOnly {
+                guard let password = credentials.password else { return }
+                let clip = ClipboardItem(kind: .secret, text: password, source: "Bitwarden", copiedAt: Date(), fromBitwarden: true)
+                ClipboardMonitor.shared.write(clip)
+                ClipboardMonitor.shared.record(clip)
+                ClipboardMonitor.shared.clearLater(after: .seconds(90))
+                self.domainToast.show(text: "Mot de passe copié (effacé dans 90 s)", symbol: "key.fill", tint: .systemBlue)
+                return
+            }
+            guard let url = item.loginURL else {
+                return self.domainToast.show(text: "Pas d'adresse web pour « \(item.name) »", symbol: "exclamationmark.triangle.fill", tint: .systemOrange)
+            }
+            let space = service.vault.spaceID(for: item, config: self.config).flatMap(self.space) ?? self.currentSpace
+            let tab = self.newTab(url: url, in: space, activate: true)
+            self.pendingFills[tab.id] = PendingFill(item: item, username: credentials.username, password: credentials.password,
+                                                    expires: Date().addingTimeInterval(180))
+        }
+    }
+
+    /// Remplit l'onglet si la page est bien sur le site enregistré (garde-fou anti-hameçonnage).
+    private func runFill(_ fill: PendingFill, in tab: BrowserTab) {
+        guard let view = tab.liveWebView, BitwardenVault.pageMatches(tab.url, item: fill.item) else { return }
+        let arguments: [String: Any] = ["username": fill.username ?? "", "password": fill.password ?? "",
+                                        "site": tab.url?.host()?.lowercased() ?? ""]
+        Task { [weak self] in
+            let result = try? await view.callAsyncJavaScript(LoginFiller.script, arguments: arguments, contentWorld: EscapeRelay.world)
+            guard let self, (result as? String) == "filled" else { return }
+            self.pendingFills[tab.id] = nil
+            self.domainToast.show(text: "Rempli : \(fill.username ?? fill.item.name)", symbol: "checkmark.shield.fill", tint: .systemBlue,
+                                  space: (tab.space.name, tab.space.color))
+        }
+    }
+
+    @objc func unlockBitwardenAction(_ sender: Any?) {
+        let service = BitwardenService.shared
+        if service.isDemo || service.isUnlocked { return }
+        guard case .locked(let email) = service.status else { return showBitwardenSetup() }
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Déverrouiller Bitwarden"
+        alert.informativeText = "Pour chercher dans ton coffre depuis Cmd+T\(email.map { " (\($0))" } ?? ""). "
+            + "Le mot de passe maître est transmis à la CLI officielle bw, jamais enregistré."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "Mot de passe maître"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Déverrouiller")
+        alert.addButton(withTitle: "Annuler")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            let password = field.stringValue
+            field.stringValue = ""
+            self?.domainToast.show(text: "Déverrouillage de Bitwarden…", symbol: "lock.open.fill", tint: .systemBlue)
+            Task { [weak self] in
+                do {
+                    try await service.unlock(password: password)
+                    self?.domainToast.show(text: "Bitwarden déverrouillé · \(service.vault.items.count) identifiants",
+                                           symbol: "lock.open.fill", tint: .systemBlue)
+                } catch {
+                    self?.showError("Bitwarden n'a pas pu être déverrouillé", error)
+                }
+            }
+        }
+    }
+
+    private func showBitwardenSetup() {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Connecter la CLI Bitwarden"
+        alert.informativeText = BitwardenService.shared.status == .notInstalled
+            ? "La CLI officielle bw est introuvable. Installe-la avec : brew install bitwarden-cli"
+            : "Une seule fois, dans le Terminal : « bw login » (e-mail, mot de passe maître, double authentification). "
+              + "Si ton compte est sur le serveur européen, tape d'abord « bw config server https://vault.bitwarden.eu »."
+        alert.addButton(withTitle: "Copier « bw login »")
+        alert.addButton(withTitle: "Fermer")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("bw login", forType: .string)
+        }
+    }
+
+    private func showError(_ title: String, _ error: Error) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = error.localizedDescription
+        alert.beginSheetModal(for: window)
+    }
+
+    @objc func linkBitwardenFolderAction(_ sender: Any?) {
+        let folderID = (sender as? NSMenuItem)?.representedObject as? String
+        config.linkBitwardenFolder(folderID, to: currentSpace.id)
+        spacesStore.save(config)
+        onSpacesChanged?()
+        let name = folderID.flatMap { id in BitwardenService.shared.vault.folders.first { $0.id == id }?.name }
+        announceSpace(name.map { "Dossier Bitwarden « \($0) » relié à" } ?? "Dossier Bitwarden automatique pour", symbol: "shield.lefthalf.filled")
     }
 
     // MARK: Dialogues d'espaces

@@ -8,6 +8,8 @@ struct CommandResult: Equatable, Sendable {
         case archived(id: UUID, space: String)
         /// Élément du presse-papier : ouvrir le lien, ou coller (Touch ID pour un secret).
         case clipboard(id: UUID, kind: ClipboardItem.Kind, bitwarden: Bool)
+        /// Identifiant Bitwarden : ouvrir le site dans son espace et remplir.
+        case bitwarden(id: String, space: String?)
         case favorite
         case history
         case address
@@ -24,6 +26,10 @@ struct CommandResult: Equatable, Sendable {
         case moveTab(UUID)
         /// « Toujours ouvrir ce site dans cet espace » (règle de routage).
         case routeHostHere
+        case unlockBitwarden
+        case lockBitwarden
+        /// La CLI n'est pas connectée : expliquer `bw login`.
+        case setupBitwarden
     }
 
     var kind: Kind
@@ -39,6 +45,7 @@ struct CommandResult: Equatable, Sendable {
         case .openTab: "Basculer"
         case .archived: "Rouvrir"
         case .clipboard(_, let kind, _): kind == .link ? "Ouvrir" : "Coller"
+        case .bitwarden: "Remplir"
         case .favorite, .history, .address: "Ouvrir"
         case .search, .suggestion: "Rechercher"
         case .command: "Exécuter"
@@ -70,13 +77,16 @@ struct CommandBarEngine {
         var currentSpaceID: UUID?
         /// Espace où une règle envoie déjà le site actuel (pour ne pas proposer une règle inutile).
         var routedSpaceForActiveHost: UUID?
+        /// État de la CLI Bitwarden (commandes Déverrouiller / Verrouiller).
+        var bitwarden: BitwardenStatus = .notInstalled
     }
 
     static let maxResults = 9
 
     /// - Parameter clipboard: l'historique du presse-papier (le moteur y cherche lui-même).
     func results(for rawQuery: String, tabs: [OpenTabInfo], context: Context, suggestions: [String] = [],
-                 archived: [ArchivedTab] = [], clipboard: ClipboardHistory = ClipboardHistory(), now: Date = Date()) -> [CommandResult] {
+                 archived: [ArchivedTab] = [], clipboard: ClipboardHistory = ClipboardHistory(),
+                 bitwarden: [BitwardenEntry] = [], now: Date = Date()) -> [CommandResult] {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty { return emptyQueryResults(tabs: tabs, clipboard: clipboard, now: now) }
 
@@ -132,6 +142,17 @@ struct CommandBarEngine {
                                  subtitle: host, url: place.url, isFavorite: place.isFavorite, score: place.score))
         }
 
+        // Bitwarden : comme un onglet ouvert, plus haut si le nom du site commence par ce qu'on tape.
+        for (index, entry) in bitwarden.enumerated() {
+            let host = entry.item.loginURL.map(PlacesStore.host) ?? ""
+            let first = tokens.first ?? ""
+            let nameMatch = !first.isEmpty && (Self.normalize(entry.item.name).hasPrefix(first) || host.hasPrefix(first))
+            let details = [entry.item.username, host.isEmpty ? nil : host].compactMap { $0 }.joined(separator: " · ")
+            results.append(.init(kind: .bitwarden(id: entry.item.id, space: entry.spaceName), title: entry.item.name,
+                                 subtitle: details.isEmpty ? "Bitwarden" : details, url: entry.item.loginURL,
+                                 score: 65 + (nameMatch ? 40 : 0) - Double(index)))
+        }
+
         // Presse-papier : sous les onglets ouverts ; en tête si l'on tape « presse-papier », « copie »…
         let wantsClipboard = ClipboardHistory.wantsEverything(tokens)
         for (index, item) in clipboard.search(query).enumerated() {
@@ -182,6 +203,12 @@ struct CommandBarEngine {
         var catalog: [(CommandResult.CommandID, String, String)] = [
             (.newSpace, "Nouvel espace", "nouvel nouveau espace creer"),
         ]
+        switch context.bitwarden {
+        case .locked: catalog.append((.unlockBitwarden, "Déverrouiller Bitwarden (recherche dans Cmd+T)", "bitwarden deverrouiller coffre mot passe identifiant"))
+        case .unlocked: catalog.append((.lockBitwarden, "Verrouiller Bitwarden", "bitwarden verrouiller coffre"))
+        case .unauthenticated: catalog.append((.setupBitwarden, "Bitwarden : connecter la CLI (bw login)", "bitwarden connecter cli coffre deverrouiller"))
+        case .notInstalled: break
+        }
         let others = context.spaces.filter { $0.id != context.currentSpaceID }
         catalog += others.map { (.switchSpace($0.id), "Aller à l'espace « \($0.name) »", "aller espace basculer \($0.name)") }
         if let url = context.activeURL {

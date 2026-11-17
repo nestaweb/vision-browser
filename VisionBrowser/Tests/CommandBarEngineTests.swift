@@ -160,6 +160,30 @@ final class CommandBarEngineTests: XCTestCase {
         XCTAssertFalse(try engine().results(for: "", tabs: [], context: context, clipboard: old, now: now).contains { $0.title == "vieux" })
     }
 
+    func testBitwardenResultsShowSpaceAndNeverThePassword() throws {
+        let proB = UUID()
+        let entry = BitwardenEntry(item: BitwardenItem(id: "b2", name: "Zoho", username: "direction@exemple-b.fr",
+                                                       uris: [URL(string: "https://accounts.zoho.eu")!], folderID: nil),
+                                   spaceID: proB, spaceName: "Pro B")
+        let result = try engine().results(for: "zoho", tabs: [], context: context, bitwarden: [entry]).first
+        XCTAssertEqual(result?.kind, .bitwarden(id: "b2", space: "Pro B"))
+        XCTAssertEqual(result?.subtitle, "direction@exemple-b.fr · accounts.zoho.eu")
+        XCTAssertEqual(result?.actionLabel, "Remplir")
+    }
+
+    func testBitwardenCommandsFollowTheVaultState() throws {
+        var ctx = context
+        let kinds = { (c: CommandBarEngine.Context) in try self.engine().results(for: "bitwarden", tabs: [], context: c).map(\.kind) }
+        ctx.bitwarden = .locked(email: nil)
+        XCTAssertTrue(try kinds(ctx).contains(.command(.unlockBitwarden)))
+        ctx.bitwarden = .unlocked(email: nil)
+        XCTAssertTrue(try kinds(ctx).contains(.command(.lockBitwarden)))
+        ctx.bitwarden = .unauthenticated
+        XCTAssertTrue(try kinds(ctx).contains(.command(.setupBitwarden)))
+        ctx.bitwarden = .notInstalled
+        XCTAssertFalse(try kinds(ctx).contains { if case .command = $0 { true } else { false } })
+    }
+
     func testSuggestionParsing() {
         XCTAssertEqual(SearchSuggestions.parse(Data(#"["swi",["swift","swiftui"]]"#.utf8)), ["swift", "swiftui"])
         XCTAssertEqual(SearchSuggestions.parse(Data("{}".utf8)), [])

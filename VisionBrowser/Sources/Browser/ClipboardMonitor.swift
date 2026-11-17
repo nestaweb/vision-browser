@@ -26,6 +26,9 @@ final class ClipboardMonitor {
     init(store: ClipboardStore?) {
         self.store = store
         history = ClipboardHistory(items: store?.load() ?? [])
+        // Des secrets gardés par une version précédente (règles moins strictes) quittent le disque.
+        let reclassified = history.reclassifySecrets()
+        if !reclassified.isEmpty { store?.delete(reclassified) }
     }
 
     func start() {
@@ -42,14 +45,15 @@ final class ClipboardMonitor {
     }
 
     /// Vérifie le presse-papier après une copie (laisse le temps à la page ou à l'app d'y écrire).
-    func checkSoon(source: String?) {
+    /// - Parameter fromExtension: la copie vient d'un cadre de l'extension (menu Bitwarden dans un champ).
+    func checkSoon(source: String?, fromExtension: Bool = false) {
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
-            self?.check(source: source)
+            self?.check(source: source, fromExtension: fromExtension)
         }
     }
 
-    func check(source: String?) {
+    func check(source: String?, fromExtension: Bool = false) {
         let pasteboard = NSPasteboard.general
         let count = pasteboard.changeCount
         guard count != lastChangeCount else { return }
@@ -59,7 +63,7 @@ final class ClipboardMonitor {
             types: pasteboard.types?.map(\.rawValue) ?? [],
             string: pasteboard.string(forType: .string),
             declaredSource: pasteboard.string(forType: NSPasteboard.PasteboardType("org.nspasteboard.source")).flatMap(Self.appName))
-        guard let item = ClipboardPolicy.classify(content, fromBitwarden: bitwardenPopupOpen, source: source) else { return }
+        guard let item = ClipboardPolicy.classify(content, fromBitwarden: bitwardenPopupOpen || fromExtension, source: source) else { return }
         let kept = history.add(item)
         store?.save(kept)
         store?.trim()
@@ -118,6 +122,24 @@ final class ClipboardMonitor {
         }
     }
 
+    /// Ajoute à l'historique un élément que l'app a elle-même copié (mot de passe Bitwarden copié depuis Cmd+T).
+    func record(_ item: ClipboardItem) {
+        let kept = history.add(item)
+        store?.save(kept)
+        onChange?()
+    }
+
+    /// Vide le presse-papier après un délai, s'il contient toujours ce que l'app y a mis.
+    func clearLater(after delay: Duration) {
+        let count = NSPasteboard.general.changeCount
+        Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard NSPasteboard.general.changeCount == count else { return }
+            NSPasteboard.general.clearContents()
+            self?.markOwn()
+        }
+    }
+
     private func markOwn() {
         let count = NSPasteboard.general.changeCount
         ownChangeCounts.insert(count)
@@ -143,8 +165,8 @@ final class ClipboardMonitor {
 final class CopyRelay: NSObject, WKScriptMessageHandler {
     static let shared = CopyRelay()
     private static let name = "visionCopy"
-    /// Reçoit la vue web où la copie a eu lieu.
-    var onCopy: ((WKWebView?) -> Void)?
+    /// Reçoit la vue web où la copie a eu lieu, et si elle vient d'un cadre de l'extension (menu Bitwarden).
+    var onCopy: ((WKWebView?, Bool) -> Void)?
 
     static let source = """
     (() => {
@@ -161,6 +183,7 @@ final class CopyRelay: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        onCopy?(message.webView)
+        let fromExtension = message.frameInfo.securityOrigin.protocol.hasSuffix("-extension")
+        onCopy?(message.webView, fromExtension)
     }
 }

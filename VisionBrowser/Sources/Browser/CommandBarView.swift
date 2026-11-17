@@ -127,14 +127,26 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
         case #selector(NSResponder.moveUp(_:)):
             select(max(table.selectedRow - 1, 0)); return true
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
-            let invert = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
-            let chosen = results.indices.contains(table.selectedRow) ? results[table.selectedRow] : nil
-            onExecute?(chosen, query, invert); return true
+            submit(invert: false); return true
         case #selector(NSResponder.cancelOperation(_:)):
             onCancel?(); return true
         default:
             return false
         }
+    }
+
+    /// Cmd+Entrée : un champ de texte ne le reçoit jamais comme « Entrée » (les combinaisons avec Cmd passent
+    /// d'abord par les raccourcis). On l'intercepte donc ici, avant le champ.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard !isHidden, flags == .command, event.keyCode == 36 || event.keyCode == 76 else { return super.performKeyEquivalent(with: event) }
+        submit(invert: true)
+        return true
+    }
+
+    private func submit(invert: Bool) {
+        let chosen = results.indices.contains(table.selectedRow) ? results[table.selectedRow] : nil
+        onExecute?(chosen, query, invert)
     }
 
     // MARK: Table
@@ -247,6 +259,7 @@ private final class ResultCellView: NSTableCellView {
         switch result.kind {
         case .openTab(_, let space): showPill("Ouvert · \(space)", color: .systemGreen)
         case .archived(_, let space): showPill(space.isEmpty ? "Archivé" : "Archivé · \(space)", color: .systemBrown)
+        case .bitwarden(_, let space): showPill(space.map { "Bitwarden · \($0)" } ?? "Bitwarden", color: .systemBlue)
         case .clipboard(_, .secret, let bitwarden): showPill(bitwarden ? "Bitwarden · Touch ID" : "Masqué · Touch ID", color: bitwarden ? .systemBlue : .systemRed)
         default: pill.isHidden = true
         }
@@ -264,6 +277,7 @@ private final class ResultCellView: NSTableCellView {
         switch kind {
         case .openTab: ("square.on.square", .systemGreen)
         case .archived: ("archivebox.fill", .systemBrown)
+        case .bitwarden: ("shield.lefthalf.filled", .systemBlue)
         case .clipboard(_, .secret, _): ("key.fill", .systemRed)
         case .clipboard(_, .link, _): ("link", .systemPurple)
         case .clipboard: ("doc.on.clipboard.fill", .systemPurple)

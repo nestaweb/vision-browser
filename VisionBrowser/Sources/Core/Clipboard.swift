@@ -46,7 +46,7 @@ enum ClipboardPolicy {
         let source = fromBitwarden ? "Bitwarden" : (content.declaredSource ?? source)
 
         let kind: ClipboardItem.Kind
-        if fromBitwarden || types.contains(concealedType) || isOneTimeCode(text) {
+        if fromBitwarden || types.contains(concealedType) || isOneTimeCode(text) || looksLikePassword(text) {
             kind = .secret
         } else if isLink(text) {
             kind = .link
@@ -61,6 +61,22 @@ enum ClipboardPolicy {
     static func isOneTimeCode(_ text: String) -> Bool {
         let digits = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: " ", with: "")
         return (6...8).contains(digits.count) && digits.allSatisfy(\.isASCII) && digits.allSatisfy(\.isNumber)
+    }
+
+    /// Chaîne qui a l'allure d'un mot de passe : un seul « mot », ni lien ni adresse e-mail, qui mélange
+    /// au moins trois sortes de caractères (avec un symbole dès 8 caractères, sans symbole à partir de 12).
+    /// Mieux vaut masquer à tort un identifiant technique que garder un mot de passe en clair sur disque.
+    static func looksLikePassword(_ text: String) -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (8...128).contains(value.count), !value.contains(where: \.isWhitespace), !isLink(value) else { return false }
+        if value.range(of: #"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$"#, options: .regularExpression) != nil { return false }
+        let lower = value.contains(where: \.isLowercase), upper = value.contains(where: \.isUppercase)
+        let digits = value.filter(\.isNumber).count
+        // Les séparateurs courants (noms de fichiers, références) ne comptent pas comme des symboles.
+        let symbol = value.contains { !$0.isLetter && !$0.isNumber && !"_-./".contains($0) }
+        let kinds = [lower, upper, digits > 0, symbol].filter { $0 }.count
+        if symbol { return kinds >= 3 }
+        return kinds >= 3 && value.count >= 12 && digits >= 2
     }
 
     /// Un lien web complet, seul sur sa ligne.
@@ -103,6 +119,19 @@ struct ClipboardHistory: Sendable {
     }
 
     mutating func remove(_ id: UUID) { items.removeAll { $0.id == id } }
+
+    /// Applique les règles actuelles aux éléments déjà gardés : ce qui ressemble désormais à un secret
+    /// le devient (et quittera le disque). Renvoie les identifiants reclassés.
+    @discardableResult
+    mutating func reclassifySecrets() -> [UUID] {
+        var changed: [UUID] = []
+        for index in items.indices where items[index].kind != .secret
+            && (ClipboardPolicy.looksLikePassword(items[index].text) || ClipboardPolicy.isOneTimeCode(items[index].text)) {
+            items[index].kind = .secret
+            changed.append(items[index].id)
+        }
+        return changed
+    }
 
     /// Retire les secrets expirés et les éléments trop anciens. Renvoie les identifiants retirés.
     @discardableResult

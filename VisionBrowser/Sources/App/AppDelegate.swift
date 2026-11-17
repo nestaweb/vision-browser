@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
         NSApp.mainMenu = MainMenu.build()
         ClipboardMonitor.shared.start()
+        Task { await BitwardenService.shared.refreshStatus() }
         Task {
             // L'extension est chargée AVANT les onglets : elle doit les connaître dès leur premier chargement.
             let report = await host.loadBitwarden()
@@ -57,5 +58,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         browser?.saveSessionNow()
+        BitwardenService.shared.lockBeforeQuit()
     }
 }

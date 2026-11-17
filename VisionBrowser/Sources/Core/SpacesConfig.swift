@@ -5,6 +5,8 @@ struct SpaceRecord: Codable, Equatable, Sendable {
     var id: UUID
     var name: String
     var colorIndex: Int
+    /// Dossier Bitwarden relié à l'espace (F6). Sans réglage, un dossier du même nom est relié automatiquement.
+    var bitwardenFolderID: String? = nil
 }
 
 /// Règle de routage : les liens de ce domaine (et de ses sous-domaines) s'ouvrent dans cet espace.
@@ -52,6 +54,16 @@ struct SpacesConfig: Codable, Equatable, Sendable {
     }
 
     func space(_ id: UUID) -> SpaceRecord? { spaces.first { $0.id == id } }
+
+    /// Relie un dossier Bitwarden à un espace (nil : retour au lien automatique par le nom).
+    /// Un dossier n'est relié qu'à un seul espace.
+    mutating func linkBitwardenFolder(_ folderID: String?, to spaceID: UUID) {
+        if let folderID {
+            for i in spaces.indices where spaces[i].bitwardenFolderID == folderID { spaces[i].bitwardenFolderID = nil }
+        }
+        guard let index = spaces.firstIndex(where: { $0.id == spaceID }) else { return }
+        spaces[index].bitwardenFolderID = folderID
+    }
 
     private func uniqueName(_ name: String) -> String {
         let taken = Set(spaces.map { $0.name.lowercased() })
