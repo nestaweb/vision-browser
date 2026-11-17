@@ -37,11 +37,7 @@ xcodegen generate
 xcodebuild -project VisionSpike.xcodeproj -scheme VisionSpike -derivedDataPath build build
 ```
 
-Download `dist-firefox-<version>.zip` from the [Bitwarden releases](https://github.com/bitwarden/clients/releases) and unzip it into `prototypes/phase0/Extensions/bitwarden`, then apply the WebKit adaptations:
-
-```bash
-prototypes/phase0/scripts/patch-bitwarden.sh
-```
+Download `dist-firefox-<version>.zip` from the [Bitwarden releases](https://github.com/bitwarden/clients/releases) and unzip it into `prototypes/phase0/Extensions/bitwarden`.
 
 ```bash
 # Automated checks: space isolation and extension loading
