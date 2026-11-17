@@ -112,6 +112,10 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
         let wasOpen = isOpen
         isOpen = true
         isHidden = false
+        // Survol : la zone créée pendant que la barre était masquée est ignorée par AppKit (on la recrée), et le système
+        // n'envoie les mouvements de souris qu'aux fenêtres qui les demandent.
+        updateTrackingAreas()
+        window?.acceptsMouseMovedEvents = true
         field.selectText(nil)
         if !wasOpen { playOpening() }
     }
@@ -269,6 +273,19 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
         footer.frame = NSRect(x: 18, y: footerTop + 10, width: width - 36, height: 16)
     }
 
+    /// Survol : une seule zone pour la barre ; la ligne sous le pointeur est choisie (voir `SceneView.mouseMoved`).
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard isOpen else { return }
+        let point = sheet.convert(event.locationInWindow, from: nil)
+        if let index = rows.firstIndex(where: { $0.frame.contains(point) }) { select(index, animated: true) }
+    }
+
     private func submit(_ mode: Submit) {
         let chosen = results.indices.contains(selected) ? results[selected] : nil
         onExecute?(chosen, query, mode)
@@ -343,6 +360,7 @@ private final class ResultRow: FlippedView {
     init(result: CommandResult) {
         self.result = result
         super.init(frame: .zero)
+        clipsToBounds = true
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         meta.alignment = .right
@@ -394,11 +412,5 @@ private final class ResultRow: FlippedView {
         }
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
-    }
-    override func mouseEntered(with event: NSEvent) { onHover?() }
     override func mouseUp(with event: NSEvent) { onClick?() }
 }

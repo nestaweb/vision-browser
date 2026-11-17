@@ -115,6 +115,21 @@ final class SceneView: FlippedView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// Survol : une seule zone pour toute la Scène ; à chaque mouvement, la vignette sous le pointeur est choisie.
+    /// (Des zones par vignette ne suivent pas de façon fiable des vues qui montent, glissent et se recréent.)
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = rowDocument.convert(event.locationInWindow, from: nil)
+        guard let index = thumbs.firstIndex(where: { $0.originX <= point.x && point.x < $0.originX + $0.frame.width
+                                                     && point.y >= 0 && point.y <= rowDocument.bounds.height }) else { return }
+        thumbs[index].onHover?()
+    }
+
     // MARK: Ouverture et fermeture
 
     /// Ouvre la Scène sur un espace : la page (sa capture) recule jusqu'à sa place, la rangée et le rail apparaissent.
@@ -126,6 +141,10 @@ final class SceneView: FlippedView {
         originalImage = pageImage
         isHidden = false
         alphaValue = 1
+        // Survol : la zone créée pendant que la vue était masquée est ignorée par AppKit (on la recrée), et le système
+        // n'envoie les mouvements de souris qu'aux fenêtres qui les demandent.
+        updateTrackingAreas()
+        window?.acceptsMouseMovedEvents = true
         window?.makeFirstResponder(self)
         reload()
         selected = cards.firstIndex { $0.id == activeTabID } ?? 0
@@ -193,6 +212,8 @@ final class SceneView: FlippedView {
         layoutScene()
         updateSelection(animated: false)
         if !isHidden, cards.indices.contains(selected), keep != cards[selected].id { setStageImage(cards[selected].image, transition: nil) }
+        // Dernier onglet de l'espace fermé (⌘W) : la page en grand ne doit plus le montrer.
+        if !isHidden, cards.isEmpty { setStageImage(nil, transition: nil) }
     }
 
     /// Montre un autre espace : la rangée et la page glissent à la verticale, comme le rail.
@@ -532,6 +553,7 @@ final class SceneThumbView: FlippedView, NSDraggingSource {
         self.card = card
         super.init(frame: .zero)
         wantsLayer = true
+        clipsToBounds = true
         image.contents = card.image
         image.contentsGravity = .resizeAspectFill
         image.masksToBounds = true
@@ -567,13 +589,6 @@ final class SceneThumbView: FlippedView, NSDraggingSource {
         name.textColor = isSelected ? Design.Palette.paper : Design.Palette.paper(.secondary)
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) { onHover?() }
     override func mouseDown(with event: NSEvent) { mouseDownPoint = event.locationInWindow }
     override func mouseUp(with event: NSEvent) {
         defer { mouseDownPoint = nil }

@@ -125,7 +125,10 @@ enum Design {
         }
 
         /// Réglage macOS « Réduire les animations » : les déplacements sont remplacés par de simples fondus.
-        @MainActor static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+        /// Option de lancement pour vérifier ce mode sans toucher aux réglages du Mac : `-VBReduceMotion YES`.
+        @MainActor static var reduceMotion: Bool {
+            UserDefaults.standard.bool(forKey: "VBReduceMotion") || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        }
 
         /// Durée effective : allongée par le ralenti, et inchangée avec « Réduire les animations »
         /// (seuls les déplacements disparaissent, voir `allowsMovement`).
