@@ -58,10 +58,10 @@ final class DomainToastView: NSVisualEffectView {
     required init?(coder: NSCoder) { fatalError("non utilisé") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func show(text: String, secure: Bool, detail: String?) {
+    func show(text: String, symbol: String, tint: NSColor) {
         label.stringValue = text
-        icon.image = NSImage(systemSymbolName: secure ? "lock.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
-        icon.contentTintColor = secure ? .systemGreen : .systemRed
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        icon.contentTintColor = tint
         let view = self
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
@@ -75,76 +75,6 @@ final class DomainToastView: NSVisualEffectView {
                 context.duration = 0.4
                 MainActor.assumeIsolated { self.animator().alphaValue = 0 }
             }, completionHandler: nil)
-        }
-    }
-}
-
-/// Barre d'adresse en surcouche (version simple de la phase 1 ; la barre complète arrive en phase 2).
-@MainActor
-final class AddressBarView: NSVisualEffectView, NSTextFieldDelegate {
-    let field = NSTextField()
-    private let hint = NSTextField(labelWithString: "")
-    var onSubmit: ((String, Bool) -> Void)?
-    var onCancel: (() -> Void)?
-    private var isNewTab = false
-
-    init() {
-        super.init(frame: .zero)
-        material = .popover
-        blendingMode = .withinWindow
-        state = .active
-        wantsLayer = true
-        layer?.cornerRadius = 14
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        shadow = NSShadow()
-        layer?.shadowOpacity = 0.25
-        layer?.shadowRadius = 24
-
-        field.font = .systemFont(ofSize: 20)
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.placeholderString = "Rechercher ou saisir une adresse"
-        field.delegate = self
-        field.cell?.usesSingleLineMode = true
-        field.cell?.isScrollable = true
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-
-        let stack = NSStackView(views: [field, hint])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 12, right: 18)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            field.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("non utilisé") }
-
-    func present(text: String, newTab: Bool) {
-        isNewTab = newTab
-        field.stringValue = text
-        hint.stringValue = newTab ? "Entrée : ouvrir dans un nouvel onglet · Échap : annuler"
-                                  : "Entrée : ouvrir dans cet onglet · Échap : annuler"
-        isHidden = false
-        field.selectText(nil)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        switch selector {
-        case #selector(NSResponder.insertNewline(_:)):
-            onSubmit?(field.stringValue, isNewTab); return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            onCancel?(); return true
-        default:
-            return false
         }
     }
 }

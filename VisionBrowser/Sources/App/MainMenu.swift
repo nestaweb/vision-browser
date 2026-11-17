@@ -20,8 +20,9 @@ enum MainMenu {
 
         main.addItem(submenu("Fichier", [
             item("Nouvel onglet", #selector(BrowserWindowController.newTabAction(_:)), "t"),
-            item("Ouvrir l'adresse…", #selector(BrowserWindowController.editAddressAction(_:)), "l"),
+            item("Modifier l'adresse…", #selector(BrowserWindowController.editAddressAction(_:)), "l"),
             item("Rouvrir l'onglet fermé", #selector(BrowserWindowController.reopenClosedTabAction(_:)), "t", [.command, .shift]),
+            item("Ajouter aux favoris / Retirer", #selector(BrowserWindowController.toggleFavoriteAction(_:)), "d", [.command, .shift]),
             .separator(),
             item("Fermer l'onglet", #selector(BrowserWindowController.closeTabAction(_:)), "w"),
         ]))

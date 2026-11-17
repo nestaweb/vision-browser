@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Lancée par les tests unitaires : ni fenêtre, ni Bitwarden, ni session
+        // (sinon les tests liraient et réécriraient les vrais onglets de l'utilisateur).
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
         NSApp.mainMenu = MainMenu.build()
         Task {
             // L'extension est chargée AVANT les onglets : elle doit les connaître dès leur premier chargement.

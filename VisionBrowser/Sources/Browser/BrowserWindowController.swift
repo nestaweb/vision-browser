@@ -15,7 +15,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
     private var closedURLs: [URL] = []
 
     private let pageContainer = NSView()
-    private let addressBar = AddressBarView()
+    private let commandBar = CommandBarView()
     private let domainToast = DomainToastView()
     private let insecureStripe = PassthroughView()
     private let trafficLightZone = TrafficLightZone()
@@ -23,6 +23,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
     let popupAnchor = PassthroughView()
 
     private var saveTask: Task<Void, Never>?
+    /// Historique et favoris (phase 2) ; nil si la base ne s'ouvre pas : le navigateur reste utilisable.
+    private let places = PlacesStore.openDefault()
+    private lazy var engine = CommandBarEngine(places: places)
+    private var suggestionTask: Task<Void, Never>?
     private var keyMonitor: Any?
 
     init(host: ExtensionHost, session: SessionStore) {
@@ -42,7 +46,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
         buildInterface()
         host.window = self
         DownloadManager.shared.onFinished = { [weak self] url in
-            self?.domainToast.show(text: "Téléchargé : \(url.lastPathComponent)", secure: true, detail: nil)
+            self?.domainToast.show(text: "Téléchargé : \(url.lastPathComponent)", symbol: "arrow.down.circle.fill", tint: .systemBlue)
         }
         host.controller.didOpenWindow(self)
         host.controller.didFocusWindow(self)
@@ -75,7 +79,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
         insecureStripe.layer?.backgroundColor = NSColor.systemRed.cgColor
         insecureStripe.isHidden = true
 
-        for view in [pageContainer, dragStrip, insecureStripe, domainToast, addressBar, trafficLightZone, popupAnchor] {
+        for view in [pageContainer, dragStrip, insecureStripe, domainToast, commandBar, trafficLightZone, popupAnchor] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -99,9 +103,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
             domainToast.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
             domainToast.centerXAnchor.constraint(equalTo: content.centerXAnchor),
 
-            addressBar.topAnchor.constraint(equalTo: content.topAnchor, constant: 90),
-            addressBar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            addressBar.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.5, constant: 120),
+            commandBar.topAnchor.constraint(equalTo: content.topAnchor, constant: 90),
+            commandBar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            commandBar.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.5, constant: 160),
+            commandBar.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
 
             trafficLightZone.topAnchor.constraint(equalTo: content.topAnchor),
             trafficLightZone.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -118,9 +123,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
         trafficLightZone.onHover = { [weak self] inside in self?.setTrafficLightsVisible(inside) }
         setTrafficLightsVisible(false)
 
-        addressBar.isHidden = true
-        addressBar.onSubmit = { [weak self] text, newTab in self?.submitAddress(text, newTab: newTab) }
-        addressBar.onCancel = { [weak self] in self?.hideAddressBar() }
+        commandBar.isHidden = true
+        commandBar.onQueryChange = { [weak self] query in self?.refreshResults(for: query) }
+        commandBar.onExecute = { [weak self] result, typed, invert in self?.execute(result, typed: typed, invert: invert) }
+        commandBar.onCancel = { [weak self] in self?.hideCommandBar() }
     }
 
     private func setTrafficLightsVisible(_ visible: Bool) {
@@ -187,6 +193,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
         guard tab !== activeTab else { return }
         let previous = activeTab
         activeTab = tab
+        tab.lastActivated = Date()
         pageContainer.subviews.forEach { $0.removeFromSuperview() }
         tab.webView.translatesAutoresizingMaskIntoConstraints = false
         pageContainer.addSubview(tab.webView)
@@ -219,11 +226,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
     func index(of tab: BrowserTab) -> Int { tabs.firstIndex { $0 === tab } ?? 0 }
 
     func tabDidChangeURL(_ tab: BrowserTab) {
+        if let url = tab.url { places?.recordVisit(url: url, title: tab.title) }
         if tab === activeTab { updateChrome(announce: DomainPolicy.shouldAnnounce(previous: tab.previousURL, next: tab.url)) }
         scheduleSessionSave()
     }
 
     func tabDidChangeTitle(_ tab: BrowserTab) {
+        if let url = tab.url, let title = tab.title { places?.updateTitle(url: url, title: title) }
         if tab === activeTab { window?.title = tab.title ?? "Vision Browser" }
     }
 
@@ -233,35 +242,89 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKWeb
         insecureStripe.isHidden = !DomainPolicy.isInsecure(url)
         window?.title = activeTab?.title ?? "Vision Browser"
         if announce, let host = DomainPolicy.displayHost(for: url) {
-            domainToast.show(text: host, secure: !DomainPolicy.isInsecure(url), detail: nil)
+            let secure = !DomainPolicy.isInsecure(url)
+            domainToast.show(text: host, symbol: secure ? "lock.fill" : "exclamationmark.triangle.fill", tint: secure ? .systemGreen : .systemRed)
         }
     }
 
-    // MARK: Barre d'adresse
+    // MARK: Barre de commande (Cmd+T / Cmd+L)
 
-    private func showAddressBar(newTab: Bool) {
-        addressBar.present(text: newTab ? "" : (activeTab?.url?.absoluteString ?? ""), newTab: newTab)
-        window?.makeFirstResponder(addressBar.field)
+    private func showCommandBar(newTab: Bool) {
+        commandBar.present(text: newTab ? "" : (activeTab?.url?.absoluteString ?? ""), newTab: newTab)
+        window?.makeFirstResponder(commandBar.field)
+        refreshResults(for: commandBar.query)
     }
 
-    private func hideAddressBar() {
-        addressBar.isHidden = true
+    private func hideCommandBar() {
+        suggestionTask?.cancel()
+        commandBar.isHidden = true
         if let webView = activeTab?.webView { window?.makeFirstResponder(webView) }
     }
 
-    private func submitAddress(_ text: String, newTab: Bool) {
-        guard let input = AddressInput.parse(text) else { return hideAddressBar() }
-        hideAddressBar()
-        if newTab || activeTab == nil { self.newTab(url: input.url, activate: true) }
-        else { activeTab?.webView.load(URLRequest(url: input.url)) }
+    private var openTabInfos: [OpenTabInfo] {
+        tabs.map { OpenTabInfo(id: $0.id, url: $0.url, title: $0.title, space: space.name, lastActivated: $0.lastActivated) }
+    }
+
+    private var commandContext: CommandBarEngine.Context {
+        .init(activeURL: activeTab?.url, activeIsFavorite: activeTab?.url.map { places?.isFavorite($0) ?? false } ?? false)
+    }
+
+    /// Résultats locaux immédiatement, puis suggestions du moteur de recherche dès qu'elles arrivent.
+    private func refreshResults(for query: String) {
+        commandBar.show(results: engine.results(for: query, tabs: openTabInfos, context: commandContext))
+        suggestionTask?.cancel()
+        guard case .search? = AddressInput.parse(query) else { return }
+        suggestionTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            let suggestions = await SearchSuggestions.fetch(query)
+            guard !Task.isCancelled, let self, !self.commandBar.isHidden, self.commandBar.query == query else { return }
+            self.commandBar.show(results: self.engine.results(for: query, tabs: self.openTabInfos, context: self.commandContext,
+                                                             suggestions: suggestions), keepSelection: true)
+        }
+    }
+
+    /// Exécute le résultat choisi. `invert` (Cmd+Entrée) inverse « nouvel onglet » et « onglet actuel ».
+    private func execute(_ result: CommandResult?, typed: String, invert: Bool) {
+        let inNewTab = commandBar.isNewTab != invert
+        hideCommandBar()
+        guard let result else {
+            if let input = AddressInput.parse(typed) { open(input.url, inNewTab: inNewTab) }
+            return
+        }
+        switch result.kind {
+        case .openTab(let id, _):
+            if let tab = tabs.first(where: { $0.id == id }) { select(tab) }
+        case .command(.copyAddress):
+            guard let url = activeTab?.url else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            domainToast.show(text: "Adresse copiée", symbol: "doc.on.doc.fill", tint: .systemOrange)
+        case .command(.toggleFavorite):
+            toggleFavoriteForActiveTab()
+        case .favorite, .history, .address, .search, .suggestion:
+            if let url = result.url { open(url, inNewTab: inNewTab) }
+        }
+    }
+
+    private func open(_ url: URL, inNewTab: Bool) {
+        if inNewTab || activeTab == nil { newTab(url: url, activate: true) }
+        else { activeTab?.webView.load(URLRequest(url: url)) }
+    }
+
+    private func toggleFavoriteForActiveTab() {
+        guard let tab = activeTab, let url = tab.url, let places else { return }
+        let added = places.toggleFavorite(url: url, title: tab.title)
+        domainToast.show(text: added ? "Ajouté aux favoris" : "Retiré des favoris", symbol: added ? "star.fill" : "star.slash", tint: .systemYellow)
     }
 
     // MARK: Actions (menus et raccourcis)
 
-    @objc func newTabAction(_ sender: Any?) { showAddressBar(newTab: true) }
-    @objc func editAddressAction(_ sender: Any?) { showAddressBar(newTab: false) }
+    @objc func newTabAction(_ sender: Any?) { showCommandBar(newTab: true) }
+    @objc func editAddressAction(_ sender: Any?) { showCommandBar(newTab: false) }
+    @objc func toggleFavoriteAction(_ sender: Any?) { toggleFavoriteForActiveTab() }
     @objc func closeTabAction(_ sender: Any?) {
-        if !addressBar.isHidden { return hideAddressBar() }
+        if !commandBar.isHidden { return hideCommandBar() }
         if let activeTab { close(activeTab) }
     }
     @objc func reopenClosedTabAction(_ sender: Any?) {

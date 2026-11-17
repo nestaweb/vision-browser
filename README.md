@@ -19,6 +19,7 @@ Early stage. Nothing here is ready for daily use yet.
 | Product plan and tab navigation design | Done: [PLAN.md](PLAN.md), [interactive mockup](maquette/vues-onglets.html) |
 | Phase 0 prototype: isolated spaces + Bitwarden in WebKit | In progress: [prototypes/phase0](prototypes/phase0) |
 | Phase 1: the real app (full-window pages, tabs, address bar, domain indicator, Bitwarden) | Done: [VisionBrowser](VisionBrowser) |
+| Phase 2: `Cmd+T` command bar (open tabs, favorites, history with SQLite FTS5, search suggestions, commands) | Done |
 
 What phase 0 has verified so far:
 
@@ -40,7 +41,7 @@ scripts/install-bitwarden.sh   # official Firefox build, SHA-256 checked, WebKit
 open "build/Build/Products/Debug/Vision Browser.app"
 ```
 
-Shortcuts: `Cmd+T` new tab, `Cmd+L` address, `Ctrl+Tab` next tab, `Cmd+W` close, `Cmd+Shift+T` reopen, `Cmd+Shift+B` Bitwarden, `Cmd+Shift+L` autofill.
+Shortcuts: `Cmd+T` new tab, `Cmd+L` address, `Ctrl+Tab` next tab, `Cmd+W` close, `Cmd+Shift+T` reopen, `Cmd+Shift+D` favorite, `Cmd+Shift+B` Bitwarden, `Cmd+Shift+L` autofill.
 
 ## Building the phase 0 prototype
 

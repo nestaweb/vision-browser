@@ -4,7 +4,10 @@ import UniformTypeIdentifiers
 /// Un onglet : une page web, telle que l'utilisateur et l'extension (API `tabs.*`) la voient.
 @MainActor
 final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUIDelegate {
+    let id = UUID()
     let space: Space
+    /// Dernière activation (classement « récents d'abord » dans Cmd+T et, plus tard, Ctrl+Tab).
+    var lastActivated = Date()
     let webView: WKWebView
     weak var owner: BrowserWindowController?
     private weak var host: ExtensionHost?
