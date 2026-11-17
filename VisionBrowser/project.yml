@@ -46,6 +46,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.visionbrowser.browser
         PRODUCT_NAME: Vision Browser
+        # Icône : le bonhomme « Scène » (design/logo.svg), générée par scripts/make-icon.swift.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   VisionBrowserTests:
     type: bundle.unit-test
     platform: macOS

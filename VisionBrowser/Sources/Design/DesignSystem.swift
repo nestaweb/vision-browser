@@ -149,7 +149,7 @@ enum Design {
                 context.timingFunction = curve
                 context.allowsImplicitAnimation = true
                 MainActor.assumeIsolated { changes() }
-            }, completionHandler: completion.map { done in { MainActor.assumeIsolated { done() } } })
+            }, completionHandler: completion.map { done in { @Sendable in MainActor.assumeIsolated { done() } } })
         }
     }
 }

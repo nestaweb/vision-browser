@@ -13,3 +13,6 @@ prototypes/phase0/Extensions/
 # Vision Browser
 VisionBrowser/build/
 VisionBrowser/*.xcodeproj/
+
+# Images disque d'installation fabriquées par VisionBrowser/scripts/make-dmg.sh
+dist/

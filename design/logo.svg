@@ -1,0 +1,11 @@
+<!-- Vision Browser : le bonhomme « Scène » (B1). Toile 1024, corps 824 × 824 (grille d'icône macOS).
+     La page qui recule fait la tête (deux yeux en traits), la rangée d'onglets les épaules, celui du milieu relevé. -->
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#252523"/>
+  <rect x="262" y="236" width="500" height="312" rx="22" fill="#f2f0eb"/>
+  <rect x="418" y="338" width="22" height="84" rx="11" fill="#1c1c1a"/>
+  <rect x="584" y="338" width="22" height="84" rx="11" fill="#1c1c1a"/>
+  <rect x="262" y="626" width="148" height="92" rx="14" fill="#f2f0eb" fill-opacity=".32"/>
+  <rect x="438" y="604" width="148" height="92" rx="14" fill="#f2f0eb"/>
+  <rect x="614" y="626" width="148" height="92" rx="14" fill="#f2f0eb" fill-opacity=".32"/>
+</svg>
