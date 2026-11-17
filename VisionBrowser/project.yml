@@ -1,0 +1,66 @@
+# Vision Browser : application macOS définitive.
+# Générer le projet Xcode : xcodegen generate (le .xcodeproj n'est pas versionné).
+name: VisionBrowser
+options:
+  bundleIdPrefix: app.visionbrowser
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  VisionBrowser:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    info:
+      path: Sources/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Vision Browser
+        CFBundleName: Vision Browser
+        LSMinimumSystemVersion: "26.0"
+        NSPrincipalClass: NSApplication
+        LSApplicationCategoryType: public.app-category.productivity
+        # Permet à Vision Browser de devenir le navigateur par défaut.
+        CFBundleURLTypes:
+          - CFBundleURLName: Web site URL
+            CFBundleURLSchemes: [http, https]
+            CFBundleTypeRole: Viewer
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: HTML document
+            CFBundleTypeRole: Viewer
+            LSItemContentTypes: [public.html]
+        NSUserActivityTypes: [NSUserActivityTypeBrowsingWeb]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.visionbrowser.browser
+        PRODUCT_NAME: Vision Browser
+  VisionBrowserTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: VisionBrowser
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.visionbrowser.browser.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Vision Browser.app/Contents/MacOS/Vision Browser"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  VisionBrowser:
+    build:
+      targets:
+        VisionBrowser: all
+        VisionBrowserTests: [test]
+    test:
+      targets: [VisionBrowserTests]

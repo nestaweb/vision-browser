@@ -1,0 +1,53 @@
+import AppKit
+
+@main
+enum VisionBrowserMain {
+    static func main() {
+        MainActor.assumeIsolated {
+            let app = NSApplication.shared
+            let delegate = AppDelegate()
+            app.delegate = delegate
+            app.setActivationPolicy(.regular)
+            app.run()
+            _ = delegate // garde le délégué en vie pendant toute la boucle de l'app
+        }
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let host = ExtensionHost()
+    private var browser: BrowserWindowController?
+    /// Liens reçus (autres apps, navigateur par défaut) avant que la fenêtre soit prête.
+    private var pendingURLs: [URL] = []
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.mainMenu = MainMenu.build()
+        Task {
+            // L'extension est chargée AVANT les onglets : elle doit les connaître dès leur premier chargement.
+            let report = await host.loadBitwarden()
+            report.forEach { NSLog("Vision Browser · Bitwarden : \($0)") }
+            MainMenu.installBitwardenMenu(host: host)
+
+            let controller = BrowserWindowController(host: host, session: SessionStore.default)
+            browser = controller
+            controller.showWindow(nil)
+            controller.restoreSession(extraURLs: pendingURLs)
+            pendingURLs.removeAll()
+            NSApp.activate()
+        }
+    }
+
+    /// Liens ouverts depuis une autre app (Vision Browser comme navigateur par défaut).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let web = urls.filter { ["http", "https", "file"].contains($0.scheme?.lowercased() ?? "") }
+        if let browser { web.forEach { browser.newTab(url: $0, activate: true) } }
+        else { pendingURLs.append(contentsOf: web) }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        browser?.saveSessionNow()
+    }
+}

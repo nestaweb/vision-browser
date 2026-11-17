@@ -18,7 +18,7 @@ Early stage. Nothing here is ready for daily use yet.
 |---|---|
 | Product plan and tab navigation design | Done: [PLAN.md](PLAN.md), [interactive mockup](maquette/vues-onglets.html) |
 | Phase 0 prototype: isolated spaces + Bitwarden in WebKit | In progress: [prototypes/phase0](prototypes/phase0) |
-| Phase 1: the real app | Not started |
+| Phase 1: the real app (full-window pages, tabs, address bar, domain indicator, Bitwarden) | Done: [VisionBrowser](VisionBrowser) |
 
 What phase 0 has verified so far:
 
@@ -26,6 +26,21 @@ What phase 0 has verified so far:
 - The Bitwarden **Firefox** build (Manifest V2) loads and runs in `WKWebExtension`; the Chrome build (Manifest V3 service worker) does not start.
 - Bitwarden detects the browser from the user agent, so extension pages must present a Firefox user agent.
 - Passkeys (WebAuthn) require Apple's `com.apple.developer.web-browser.public-key-credential` entitlement.
+
+## Building Vision Browser
+
+Requirements: macOS 26, Xcode 26, [XcodeGen](https://github.com/yonaskolb/XcodeGen), GitHub CLI.
+
+```bash
+cd VisionBrowser
+xcodegen generate
+xcodebuild -project VisionBrowser.xcodeproj -scheme VisionBrowser -derivedDataPath build build
+xcodebuild -project VisionBrowser.xcodeproj -scheme VisionBrowser -derivedDataPath build test
+scripts/install-bitwarden.sh   # official Firefox build, SHA-256 checked, WebKit patch applied
+open "build/Build/Products/Debug/Vision Browser.app"
+```
+
+Shortcuts: `Cmd+T` new tab, `Cmd+L` address, `Ctrl+Tab` next tab, `Cmd+W` close, `Cmd+Shift+T` reopen, `Cmd+Shift+B` Bitwarden, `Cmd+Shift+L` autofill.
 
 ## Building the phase 0 prototype
 

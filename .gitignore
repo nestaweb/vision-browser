@@ -9,3 +9,7 @@ xcuserdata/
 
 # Builds Bitwarden téléchargés (non redistribués ici, récupérables depuis les versions officielles)
 prototypes/phase0/Extensions/
+
+# Vision Browser
+VisionBrowser/build/
+VisionBrowser/*.xcodeproj/
