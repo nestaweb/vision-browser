@@ -34,7 +34,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Interface
 
-    private let pageContainer = NSView()
+    private let pageContainer = PageContainerView()
     /// Voile posé sur la page quand la barre Cmd+T est ouverte ; un clic dessus referme la barre.
     private let veil = VeilView()
     private let commandBar = CommandBarView()
@@ -104,6 +104,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         super.init(window: window)
         window.delegate = self
         window.onEscape = { [weak self] in self?.handleEscape() }
+        pageContainer.onEscape = { [weak self] in self?.handleEscape() }
         buildInterface()
         host.window = self
         DownloadManager.shared.onFinished = { [weak self] url in

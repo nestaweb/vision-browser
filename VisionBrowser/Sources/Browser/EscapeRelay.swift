@@ -65,7 +65,7 @@ final class EscapeRelay: NSObject, WKScriptMessageHandler {
 
 /// La fenêtre de navigation. Elle reçoit `Échap` quand rien d'autre ne l'a utilisé (page, champ, vue d'ensemble).
 ///
-/// Par défaut `NSWindow` en fait « Annuler » : bip d'erreur, ou sortie du plein écran. Ici, la touche est toujours
+/// Par défaut `NSWindow` en fait « Annuler » (bip d'erreur) et, en plein écran, en sort. Ici, la touche est toujours
 /// confiée au navigateur, qui décide (vue d'ensemble, fermer une surcouche, ou rien).
 final class BrowserWindow: NSWindow {
     var onEscape: (() -> Void)?
@@ -73,6 +73,7 @@ final class BrowserWindow: NSWindow {
     override func cancelOperation(_ sender: Any?) {
         onEscape?()
     }
+
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -82,4 +83,15 @@ final class BrowserWindow: NSWindow {
         }
         super.keyDown(with: event)
     }
+}
+
+/// Conteneur des pages : la vue juste au-dessus de la page dans la chaîne des répondeurs.
+///
+/// Une touche Échap que la page n'utilise pas revient de WebKit sous forme de commande « Annuler », qui remonte
+/// la chaîne des vues. En plein écran, le cadre de la fenêtre (vue interne d'AppKit, avant la fenêtre dans cette
+/// chaîne) la traite en **quittant le plein écran** : la fenêtre ne la voyait jamais. On l'arrête donc ici, au premier
+/// maillon après la page (constaté par la pile d'appels de la sortie du plein écran).
+final class PageContainerView: NSView {
+    var onEscape: (() -> Void)?
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
