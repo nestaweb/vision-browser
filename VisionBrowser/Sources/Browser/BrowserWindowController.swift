@@ -227,6 +227,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         commandBar.onQueryChange = { [weak self] query in self?.refreshResults(for: query) }
         commandBar.onExecute = { [weak self] result, typed, mode in self?.execute(result, typed: typed, mode: mode) }
         commandBar.onCancel = { [weak self] in self?.hideCommandBar() }
+        commandBar.onStepSpace = { [weak self] step in
+            // La barre se referme ; elle se rouvre d'elle-même si l'espace d'arrivée est vide.
+            self?.hideCommandBar()
+            self?.stepSpace(by: step)
+        }
 
         configureShelf()
         configureOverview()
@@ -843,6 +848,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             self.overview.reload()
         }
         overview.onDismiss = { [weak self] in self?.closeOverview(expanding: self?.activeTab?.id) }
+        overview.onShowSpace = { [weak self] id in
+            guard let self, let space = self.space(id), space !== self.currentSpace else { return }
+            self.switchTo(space, announce: false)
+        }
     }
 
     private func overviewContent(for spaceID: UUID) -> OverviewContent {
@@ -1303,6 +1312,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func switchSpaceByNumberAction(_ sender: Any?) {
         if let n = (sender as? NSMenuItem)?.tag { switchSpace(number: n) }
     }
+    /// ⇧← / ⇧→ : espace précédent / suivant (en boucle), sur la page comme dans la vue d'ensemble.
+    @objc func previousSpaceAction(_ sender: Any?) { stepSpace(by: -1) }
+    @objc func nextSpaceAction(_ sender: Any?) { stepSpace(by: 1) }
+    private func stepSpace(by step: Int) {
+        guard let i = spaces.firstIndex(where: { $0 === currentSpace }), spaces.count > 1 else { return }
+        switchSpace(number: (i + step + spaces.count) % spaces.count + 1)
+    }
+
     private func switchSpace(number n: Int) {
         guard spaces.indices.contains(n - 1) else { return }
         switchTo(spaces[n - 1])
@@ -1327,6 +1344,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             return activeTab?.url.map { config.spaceID(for: $0) != currentSpace.id && $0.host() != nil } ?? false
         case #selector(switchSpaceByNumberAction(_:)): return spaces.indices.contains(item.tag - 1)
         // ⌘← ⌘→ appartiennent au champ de texte en cours de saisie (barre Cmd+T, dialogues) : début / fin de ligne.
+        // ⇧← ⇧→ : sélection de texte dans un champ de l'app.
+        case #selector(previousSpaceAction(_:)), #selector(nextSpaceAction(_:)):
+            return spaces.count > 1 && !(window?.firstResponder is NSText)
         case #selector(goBackAction(_:)), #selector(goForwardAction(_:)):
             return activeTab != nil && !(window?.firstResponder is NSText)
         case #selector(togglePinAction(_:)):

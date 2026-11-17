@@ -39,6 +39,8 @@ final class OverviewView: NSView {
     var onPin: ((UUID, Bool) -> Void)?
     var onMove: ((UUID, UUID) -> Void)?
     var onDismiss: (() -> Void)?
+    /// L'espace affiché a changé (pastille, ⇧←/⇧→, balayage) : il devient l'espace actif, Échap y reste.
+    var onShowSpace: ((UUID) -> Void)?
 
     private(set) var spaces: [SpaceInfo] = []
     private(set) var shownSpaceID: UUID?
@@ -352,6 +354,7 @@ final class OverviewView: NSView {
         expandedSites = []
         focusedID = nil
         reload()
+        onShowSpace?(id)
     }
 
     private func stepSpace(_ step: Int) {
@@ -378,7 +381,8 @@ final class OverviewView: NSView {
             (focusables.first { $0.id == focusedID } ?? focusables.first)?.action()
         case 51: // Effacement
             if !filter.isEmpty { filter.removeLast(); focusedID = nil; reload() }
-        case 123, 124 where flags.contains(.shift):
+        // Une clause « where » ne porte que sur le motif juste avant elle : il en faut une par touche.
+        case 123 where flags.contains(.shift), 124 where flags.contains(.shift):
             stepSpace(event.keyCode == 124 ? 1 : -1)
         case 123, 124, 125, 126:
             moveFocus(keyCode: event.keyCode)

@@ -27,6 +27,8 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
     var onQueryChange: ((String) -> Void)?
     var onExecute: ((CommandResult?, _ typed: String, _ mode: Submit) -> Void)?
     var onCancel: (() -> Void)?
+    /// ⇧← / ⇧→ quand rien n'est tapé : espace précédent / suivant (sinon on resterait bloqué dans un espace vide).
+    var onStepSpace: ((Int) -> Void)?
 
     static let rowHeight: CGFloat = 46
 
@@ -141,6 +143,10 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
             submit(option ? .copy : .normal); return true
         case #selector(NSResponder.cancelOperation(_:)):
             onCancel?(); return true
+        case #selector(NSResponder.moveLeftAndModifySelection(_:)) where query.isEmpty:
+            onStepSpace?(-1); return true
+        case #selector(NSResponder.moveRightAndModifySelection(_:)) where query.isEmpty:
+            onStepSpace?(1); return true
         default:
             return false
         }

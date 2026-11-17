@@ -20,6 +20,10 @@ enum MainMenu {
             menu.addItem(entry)
         }
         menu.addItem(.separator())
+        // Sans ⌘ : dans un champ de la page, la page garde ⇧← ⇧→ (sélection) ; ailleurs, on change d'espace.
+        menu.addItem(item("Espace précédent", #selector(BrowserWindowController.previousSpaceAction(_:)), arrow(NSLeftArrowFunctionKey), [.shift]))
+        menu.addItem(item("Espace suivant", #selector(BrowserWindowController.nextSpaceAction(_:)), arrow(NSRightArrowFunctionKey), [.shift]))
+        menu.addItem(.separator())
         menu.addItem(item("Nouvel espace…", #selector(BrowserWindowController.newSpaceAction(_:)), "n", [.command, .shift]))
         menu.addItem(item("Renommer l'espace…", #selector(BrowserWindowController.renameSpaceAction(_:))))
         menu.addItem(item("Supprimer l'espace…", #selector(BrowserWindowController.deleteSpaceAction(_:))))
