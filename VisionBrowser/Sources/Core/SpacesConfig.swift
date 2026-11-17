@@ -23,7 +23,7 @@ struct SpacesConfig: Codable, Equatable, Sendable {
     /// Identifiant de l'espace historique (celui de la phase 1) : ses cookies sont conservés.
     static let defaultSpaceID = UUID(uuidString: "7E5A0000-0000-4000-8000-0000000000A1")!
     static let initial = SpacesConfig(spaces: [SpaceRecord(id: defaultSpaceID, name: "Perso", colorIndex: 0)], rules: [])
-    /// Nombre de couleurs de la palette (voir `Space.palette`).
+    /// Nombre de couleurs de la palette (voir `Design.Palette.spacePigments`).
     static let paletteCount = 8
 
     // MARK: Espaces

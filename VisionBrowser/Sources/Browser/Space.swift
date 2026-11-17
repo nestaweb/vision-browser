@@ -16,11 +16,8 @@ final class Space {
         store = WKWebsiteDataStore(forIdentifier: record.id)
     }
 
-    var color: NSColor { Self.palette[colorIndex % Self.palette.count] }
-
-    /// Palette des espaces (même nombre d'entrées que `SpacesConfig.paletteCount`).
-    static let palette: [NSColor] = [.systemTeal, .systemOrange, .systemPink, .systemPurple,
-                                     .systemBlue, .systemGreen, .systemYellow, .systemRed]
+    /// Couleur sourde de l'espace (jetons de `Design.Palette`), au lieu des couleurs système saturées.
+    var color: NSColor { Design.Palette.space(colorIndex) }
 
     /// Pastille de couleur pour les menus.
     var swatch: NSImage {
