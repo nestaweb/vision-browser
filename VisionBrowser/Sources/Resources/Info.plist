@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<string>fr</string>
 	<key>CFBundleDisplayName</key>
 	<string>Vision Browser</string>
 	<key>CFBundleDocumentTypes</key>
@@ -25,6 +25,10 @@
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>fr</string>
+	</array>
 	<key>CFBundleName</key>
 	<string>Vision Browser</string>
 	<key>CFBundlePackageType</key>

@@ -19,7 +19,7 @@ final class AddressInputTests: XCTestCase {
     }
 
     func testFreeTextIsASearch() {
-        guard case .search(let query, let url) = AddressInput.parse("export csv zoho") else {
+        guard case .search(let query, let url) = AddressInput.parse("export csv zoho", engine: .fallback) else {
             return XCTFail("devrait être une recherche")
         }
         XCTAssertEqual(query, "export csv zoho")

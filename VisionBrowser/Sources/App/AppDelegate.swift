@@ -54,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { pendingURLs.append(contentsOf: web) }
     }
 
+    @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.show() }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {

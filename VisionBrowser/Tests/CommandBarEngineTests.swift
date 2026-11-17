@@ -70,6 +70,18 @@ final class CommandBarEngineTests: XCTestCase {
         XCTAssertEqual(results.map(\.title), ["B", "A", "Kagi"])
     }
 
+    func testFromAnEmptySpaceOpenTabsAreReopenedHere() throws {
+        var empty = context
+        empty.currentSpaceIsEmpty = true
+        let tabs = [tab("https://accounts.zoho.com", "Zoho Accounts")]
+        let here = try engine().results(for: "zoho", tabs: tabs, context: empty).first { if case .openTab = $0.kind { true } else { false } }
+        XCTAssertEqual(here?.opensHere, true)
+        XCTAssertEqual(here?.actionLabel, "Ouvrir ici")
+        XCTAssertEqual(try engine().results(for: "", tabs: tabs, context: empty).first?.actionLabel, "Ouvrir ici", "même sans rien taper")
+        let elsewhere = try engine().results(for: "zoho", tabs: tabs, context: context).first { if case .openTab = $0.kind { true } else { false } }
+        XCTAssertEqual(elsewhere?.actionLabel, "Basculer", "espace non vide : on bascule vers l'onglet")
+    }
+
     func testAccentInsensitiveTabMatch() throws {
         let results = try engine().results(for: "boite reception", tabs: [tab("https://mail.zoho.eu", "Boîte de réception (12)")], context: context)
         XCTAssertTrue(results.contains { if case .openTab = $0.kind { true } else { false } })
@@ -201,6 +213,8 @@ final class CommandBarEngineTests: XCTestCase {
     func testSuggestionParsing() {
         XCTAssertEqual(SearchSuggestions.parse(Data(#"["swi",["swift","swiftui"]]"#.utf8)), ["swift", "swiftui"])
         XCTAssertEqual(SearchSuggestions.parse(Data("{}".utf8)), [])
-        XCTAssertEqual(SearchSuggestions.requestURL(for: "c++ & co")?.absoluteString, "https://duckduckgo.com/ac/?q=c++%20%26%20co&type=list")
+        let settings = BrowserSettings(defaults: UserDefaults(suiteName: "vb-tests-\(UUID())")!)
+        XCTAssertEqual(SearchSuggestions.requestURL(for: "c++ & co", settings: settings)?.absoluteString,
+                       "https://duckduckgo.com/ac/?q=c%2B%2B%20%26%20co&type=list", "« + » encodé : sinon il devient une espace")
     }
 }

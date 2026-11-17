@@ -25,6 +25,9 @@ targets:
       path: Sources/Resources/Info.plist
       properties:
         CFBundleDisplayName: Vision Browser
+        # App en français : les éléments que macOS ajoute aux menus (« Passer en plein écran »…) le sont aussi.
+        CFBundleDevelopmentRegion: fr
+        CFBundleLocalizations: [fr]
         CFBundleName: Vision Browser
         LSMinimumSystemVersion: "26.0"
         NSPrincipalClass: NSApplication

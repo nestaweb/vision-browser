@@ -83,7 +83,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let spaces = config.spaces.map(Space.init(record:))
         self.spaces = spaces
         currentSpace = spaces[0]
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1360, height: 880),
+        let window = BrowserWindow(contentRect: NSRect(x: 0, y: 0, width: 1360, height: 880),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.titlebarAppearsTransparent = true
@@ -94,6 +94,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         window.title = "Vision Browser"
         super.init(window: window)
         window.delegate = self
+        window.onEscape = { [weak self] in self?.handleEscape() }
         buildInterface()
         host.window = self
         DownloadManager.shared.onFinished = { [weak self] url in
@@ -113,10 +114,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             guard let self, !self.commandBar.isHidden else { return }
             self.refreshResults(for: self.commandBar.query, keepSelection: true)
         }
-        EscapeRelay.shared.onUnhandledEscape = { [weak self] webView in
-            guard let self, webView != nil, webView === self.displayedTab?.liveWebView else { return }
-            self.showOverview()
-        }
         host.controller.didOpenWindow(self)
         host.controller.didFocusWindow(self)
         installEventMonitors()
@@ -126,13 +123,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     required init?(coder: NSCoder) { fatalError("non utilisé") }
 
     /// Moniteurs locaux : ils voient les événements avant la fenêtre et les menus.
+    /// - Chiffres (⌘1…9, ⌘0, ⌃1…9) : reconnus par touche physique, voir `handleDigitShortcut`.
     /// - Ctrl+Tab : macOS traite Tab (navigation au clavier) avant tout raccourci de menu.
     /// - Relâcher Ctrl valide le sélecteur.
     /// - Pincer pour dézoomer sur une page à 100 % ouvre la vue d'ensemble.
     private func installEventMonitors() {
         let keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self, event.window === self.window else { return event }
-            let consumed = MainActor.assumeIsolated { self.handleSwitcherEvent(event) }
+            let consumed = MainActor.assumeIsolated { self.handleKeyEvent(event) }
             return consumed ? nil : event
         }
         let pinch = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
@@ -227,7 +225,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         commandBar.isHidden = true
         commandBar.onQueryChange = { [weak self] query in self?.refreshResults(for: query) }
-        commandBar.onExecute = { [weak self] result, typed, invert in self?.execute(result, typed: typed, invert: invert) }
+        commandBar.onExecute = { [weak self] result, typed, mode in self?.execute(result, typed: typed, mode: mode) }
         commandBar.onCancel = { [weak self] in self?.hideCommandBar() }
 
         configureShelf()
@@ -390,6 +388,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// (la configuration fournie par WebKit porte déjà son coffre de données).
     func newTab(configuration: WKWebViewConfiguration, from opener: BrowserTab) -> BrowserTab {
         let tab = BrowserTab(space: opener.space, host: host, configuration: configuration)
+        tab.opener = opener
         insert(tab, activate: true)
         return tab
     }
@@ -625,8 +624,30 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Ctrl+Tab (ordre d'utilisation récente)
 
+    /// Touches de la rangée des chiffres, par position physique (identique sur QWERTY et AZERTY).
+    private static let digitRow: [UInt16: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9, 29: 0]
+
+    /// ⌘1…9 (onglet), ⌘0 (taille réelle), ⌃1…9 (espace), quelle que soit la disposition du clavier.
+    ///
+    /// Sur un clavier français, les chiffres demandent Maj : ⌘& n'est pas « ⌘1 » pour le menu. Comme Safari et
+    /// Chrome, on regarde donc la touche physique plutôt que le caractère produit.
+    private func handleDigitShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, let digit = Self.digitRow[event.keyCode] else { return false }
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if flags == .command {
+            if digit == 0 { zoomResetAction(nil) } else { selectTab(number: digit) }
+            return true
+        }
+        if flags == .control, digit > 0 {
+            switchSpace(number: digit)
+            return true
+        }
+        return false
+    }
+
     /// Renvoie vrai si l'événement est consommé.
-    private func handleSwitcherEvent(_ event: NSEvent) -> Bool {
+    private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        if handleDigitShortcut(event) { return true }
         // Cmd+C / Cmd+X (pages, barre Cmd+T, champs de l'app) : le presse-papier sera relu juste après.
         if event.type == .keyDown, event.modifierFlags.contains(.command),
            let key = event.charactersIgnoringModifiers?.lowercased(), key == "c" || key == "x" {
@@ -683,6 +704,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         switcherShowTask?.cancel()
         switcherTabs = []
         switcher.isHidden = true
+    }
+
+    // MARK: Échap
+
+    /// Échap, quand ni la page ni un champ ne s'en est servi : ferme la surcouche ouverte, sinon ouvre la vue
+    /// d'ensemble, sauf si la page était occupée (champ en saisie, dialogue). Jamais de bip, jamais de sortie du plein écran.
+    private func handleEscape() {
+        if !commandBar.isHidden { return hideCommandBar() }
+        if !overview.isHidden { return closeOverview(expanding: activeTab?.id) }
+        if !shelf.isHidden { return hideShelf() }
+        guard let view = displayedTab?.liveWebView else { return showOverview() }
+        Task { [weak self] in
+            guard await !EscapeRelay.shared.pageIsBusy(view), let self, view === self.displayedTab?.liveWebView else { return }
+            self.showOverview()
+        }
     }
 
     // MARK: Étagère du bas
@@ -896,7 +932,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
                      currentSpaceID: currentSpace.id,
                      routedSpaceForActiveHost: url.flatMap { config.spaceID(for: $0) },
                      bitwarden: BitwardenService.shared.status,
-                     bitwardenBusy: BitwardenService.shared.isBusy)
+                     bitwardenBusy: BitwardenService.shared.isBusy,
+                     currentSpaceIsEmpty: tabs.isEmpty)
     }
 
     /// Résultats locaux immédiatement, puis suggestions du moteur de recherche dès qu'elles arrivent.
@@ -921,7 +958,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     /// Presse-papier : Entrée ouvre un lien ou colle dans le champ actif de la page ;
-    /// Cmd+Entrée remet l'élément dans le presse-papier. Touch ID d'abord pour un secret.
+    /// ⌥↩ remet l'élément dans le presse-papier. Touch ID d'abord pour un secret.
     private func useClipboardItem(_ id: UUID, copyOnly: Bool) {
         guard let item = ClipboardMonitor.shared.history.items.first(where: { $0.id == id }) else { return }
         if item.kind == .link, !copyOnly, let url = item.url {
@@ -944,23 +981,35 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    /// Exécute le résultat choisi. `invert` (Cmd+Entrée) inverse « nouvel onglet » et « onglet actuel ».
-    private func execute(_ result: CommandResult?, typed: String, invert: Bool) {
-        let inNewTab = commandBar.isNewTab != invert
+    /// Exécute le résultat choisi.
+    /// - ↩ : action normale (ouvrir, basculer vers l'onglet, remplir dans l'espace de l'identifiant…).
+    /// - ⌘↩ : toujours « l'autre onglet » : l'onglet actuel depuis Cmd+T (nouvel onglet depuis Cmd+L), pour tout
+    ///   résultat qui a une adresse, y compris un onglet d'un autre espace (rouvert ici, avec les cookies d'ici).
+    /// - ⌥↩ : copier (mot de passe, élément du presse-papier, adresse).
+    private func execute(_ result: CommandResult?, typed: String, mode: CommandBarView.Submit) {
+        let inNewTab = commandBar.isNewTab != (mode == .otherTab)
         hideCommandBar()
         guard let result else {
             if let input = AddressInput.parse(typed) { open(input.url, inNewTab: inNewTab) }
             return
         }
+        if mode == .copy, !result.isCopyable, let url = result.url {
+            return copyToPasteboard(url.absoluteString, toast: "Adresse copiée")
+        }
         switch result.kind {
         case .openTab(let id, _):
-            if let tab = tab(id) { select(tab) }
+            if mode == .otherTab || result.opensHere, let url = result.url { open(url, inNewTab: inNewTab) }
+            else if let tab = tab(id) { select(tab) }
         case .archived(let id, _):
-            reopenArchived(id)
+            if mode == .otherTab, let url = result.url { open(url, inNewTab: inNewTab) } else { reopenArchived(id) }
         case .clipboard(let id, _, _):
-            useClipboardItem(id, copyOnly: invert)
+            useClipboardItem(id, copyOnly: mode == .copy)
         case .bitwarden(let id, _):
-            useBitwardenItem(id, copyOnly: invert)
+            switch mode {
+            case .copy: if let item = BitwardenService.shared.vault.items.first(where: { $0.id == id }) { copyBitwardenPassword(item) }
+            case .otherTab: useBitwardenItem(id, here: true, inNewTab: inNewTab)
+            case .normal: useBitwardenItem(id, here: false, inNewTab: true)
+            }
         case .command(.unlockBitwarden):
             unlockBitwardenAction(nil)
         case .command(.lockBitwarden):
@@ -970,9 +1019,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             showBitwardenSetup()
         case .command(.copyAddress):
             guard let url = activeTab?.url else { return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(url.absoluteString, forType: .string)
-            domainToast.show(text: "Adresse copiée", symbol: "doc.on.doc.fill", tint: .systemOrange)
+            copyToPasteboard(url.absoluteString, toast: "Adresse copiée")
         case .command(.toggleFavorite):
             toggleFavoriteForActiveTab()
         case .command(.newSpace):
@@ -988,6 +1035,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
+    private func copyToPasteboard(_ text: String, toast: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        domainToast.show(text: toast, symbol: "doc.on.doc.fill", tint: .systemOrange)
+    }
+
     private func open(_ url: URL, inNewTab: Bool) {
         if inNewTab || activeTab == nil { newTab(url: url, activate: true) }
         else { activeTab?.webView.load(URLRequest(url: url)) }
@@ -1001,18 +1054,25 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Bitwarden (CLI)
 
-    /// Entrée : ouvre le site dans l'espace de l'identifiant et le remplit. Cmd+Entrée : copie le mot de passe
-    /// (masqué dans l'historique, effacé du presse-papier après 90 s). Touch ID d'abord.
-    private func useBitwardenItem(_ id: String, copyOnly: Bool) {
+    /// Remplit un identifiant. Touch ID d'abord.
+    /// - Parameter here: ⌘↩ : dans l'espace affiché (onglet actuel, ou nouvel onglet si `inNewTab` ou espace vide) ;
+    ///   la page actuelle n'est pas rechargée si elle est déjà sur le bon site. Sinon (↩) : nouvel onglet dans
+    ///   l'espace relié à l'identifiant (dossier Bitwarden, règle de routage).
+    private func useBitwardenItem(_ id: String, here: Bool, inNewTab: Bool) {
         let service = BitwardenService.shared
         guard let item = service.vault.items.first(where: { $0.id == id }) else { return }
-        if copyOnly { return copyBitwardenPassword(item) }
         guard let url = item.loginURL else {
             return domainToast.show(text: "Pas d'adresse web pour « \(item.name) »", symbol: "exclamationmark.triangle.fill", tint: .systemOrange)
         }
         // 1. La page s'ouvre tout de suite et charge pendant Touch ID et la lecture du mot de passe.
-        let space = service.vault.spaceID(for: item, config: config).flatMap(self.space) ?? currentSpace
-        let tab = newTab(url: url, in: space, activate: true)
+        let tab: BrowserTab
+        if here, !inNewTab, let current = activeTab {
+            tab = current
+            if !BitwardenVault.pageMatches(current.url, item: item) { current.webView.load(URLRequest(url: url)) }
+        } else {
+            let space = here ? currentSpace : (service.vault.spaceID(for: item, config: config).flatMap(self.space) ?? currentSpace)
+            tab = newTab(url: url, in: space, activate: true)
+        }
         pendingFills[tab.id] = PendingFill(item: item, username: nil, password: nil, expires: Date().addingTimeInterval(180))
         Task { [weak self] in
             // 2. Touch ID et `bw get item` (~2,5 s) en même temps ; le mot de passe n'est gardé que si Touch ID réussit.
@@ -1033,7 +1093,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    /// Cmd+Entrée : mot de passe dans le presse-papier (masqué dans l'historique, effacé après 90 s).
+    /// ⌥↩ : mot de passe dans le presse-papier (masqué dans l'historique, effacé après 90 s).
     private func copyBitwardenPassword(_ item: BitwardenItem) {
         let service = BitwardenService.shared
         Task { [weak self] in
@@ -1192,7 +1252,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         newTab(url: last.url, in: space(last.spaceID) ?? currentSpace, activate: true)
     }
     @objc func reloadAction(_ sender: Any?) { activeTab?.webView.reload() }
-    @objc func goBackAction(_ sender: Any?) { activeTab?.webView.goBack() }
+    /// Précédent ; sur une page ouverte dans un nouvel onglet par un lien (document, PDF), sans historique :
+    /// ferme l'onglet et revient à la page d'origine.
+    @objc func goBackAction(_ sender: Any?) {
+        guard let tab = activeTab else { return }
+        if tab.webView.canGoBack { tab.webView.goBack(); return }
+        guard let opener = tab.opener, allTabs.contains(where: { $0 === opener }) else { return }
+        close(tab)
+        select(opener)
+    }
     @objc func goForwardAction(_ sender: Any?) { activeTab?.webView.goForward() }
     @objc func zoomInAction(_ sender: Any?) { activeTab.map { $0.webView.pageZoom = min($0.webView.pageZoom + 0.1, 3) } }
     @objc func zoomOutAction(_ sender: Any?) { activeTab.map { $0.webView.pageZoom = max($0.webView.pageZoom - 0.1, 0.3) } }
@@ -1200,7 +1268,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func nextTabAction(_ sender: Any?) { cycleTabs(by: 1) }
     @objc func previousTabAction(_ sender: Any?) { cycleTabs(by: -1) }
     @objc func selectTabByNumberAction(_ sender: Any?) {
-        guard let n = (sender as? NSMenuItem)?.tag, !tabs.isEmpty else { return }
+        if let n = (sender as? NSMenuItem)?.tag { selectTab(number: n) }
+    }
+    /// ⌘1…8 : onglet n de l'espace ; ⌘9 : le dernier.
+    private func selectTab(number n: Int) {
+        guard !tabs.isEmpty else { return }
         select(n == 9 ? tabs[tabs.count - 1] : tabs[min(n - 1, tabs.count - 1)])
     }
     @objc func openBitwardenAction(_ sender: Any?) { host.performAction(for: activeTab) }
@@ -1229,7 +1301,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
     @objc func switchSpaceByNumberAction(_ sender: Any?) {
-        guard let n = (sender as? NSMenuItem)?.tag, spaces.indices.contains(n - 1) else { return }
+        if let n = (sender as? NSMenuItem)?.tag { switchSpace(number: n) }
+    }
+    private func switchSpace(number n: Int) {
+        guard spaces.indices.contains(n - 1) else { return }
         switchTo(spaces[n - 1])
         if !overview.isHidden { overview.show(space: spaces[n - 1].id) }
     }
@@ -1251,6 +1326,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(routeHostHereAction(_:)):
             return activeTab?.url.map { config.spaceID(for: $0) != currentSpace.id && $0.host() != nil } ?? false
         case #selector(switchSpaceByNumberAction(_:)): return spaces.indices.contains(item.tag - 1)
+        // ⌘← ⌘→ appartiennent au champ de texte en cours de saisie (barre Cmd+T, dialogues) : début / fin de ligne.
+        case #selector(goBackAction(_:)), #selector(goForwardAction(_:)):
+            return activeTab != nil && !(window?.firstResponder is NSText)
         case #selector(togglePinAction(_:)):
             item.title = targetTab?.isPinned == true ? "Désépingler l'onglet" : "Épingler l'onglet"
             return targetTab != nil

@@ -38,17 +38,28 @@ struct CommandResult: Equatable, Sendable {
     var url: URL?
     var isFavorite = false
     var score: Double
+    /// Onglet ouvert dans un autre espace, proposé depuis un espace vide : Entrée le rouvre ici.
+    var opensHere = false
 
     /// Verbe affiché à droite (« Basculer », « Ouvrir »…).
     var actionLabel: String {
         switch kind {
-        case .openTab: "Basculer"
+        case .openTab: opensHere ? "Ouvrir ici" : "Basculer"
         case .archived: "Rouvrir"
         case .clipboard(_, let kind, _): kind == .link ? "Ouvrir" : "Coller"
         case .bitwarden: "Remplir"
         case .favorite, .history, .address: "Ouvrir"
         case .search, .suggestion: "Rechercher"
         case .command: "Exécuter"
+        }
+    }
+
+    /// ⌥↩ a une copie propre à ce résultat (mot de passe, élément du presse-papier) ;
+    /// sinon ⌥↩ copie l'adresse du résultat.
+    var isCopyable: Bool {
+        switch kind {
+        case .clipboard, .bitwarden: true
+        default: false
         }
     }
 }
@@ -81,6 +92,8 @@ struct CommandBarEngine {
         var bitwarden: BitwardenStatus = .notInstalled
         /// Déverrouillage en cours : on l'indique au lieu de proposer de recommencer.
         var bitwardenBusy = false
+        /// L'espace affiché n'a aucun onglet.
+        var currentSpaceIsEmpty = false
     }
 
     static let maxResults = 9
@@ -89,6 +102,21 @@ struct CommandBarEngine {
     func results(for rawQuery: String, tabs: [OpenTabInfo], context: Context, suggestions: [String] = [],
                  archived: [ArchivedTab] = [], clipboard: ClipboardHistory = ClipboardHistory(),
                  bitwarden: [BitwardenEntry] = [], now: Date = Date()) -> [CommandResult] {
+        let list = rankedResults(for: rawQuery, tabs: tabs, context: context, suggestions: suggestions,
+                                 archived: archived, clipboard: clipboard, bitwarden: bitwarden, now: now)
+        // Espace vide : on vient d'y entrer pour l'utiliser. Un onglet ouvert ailleurs y est rouvert
+        // (avec les cookies de cet espace) au lieu de nous renvoyer dans son espace.
+        guard context.currentSpaceIsEmpty else { return list }
+        return list.map { result in
+            var result = result
+            if case .openTab = result.kind { result.opensHere = true }
+            return result
+        }
+    }
+
+    private func rankedResults(for rawQuery: String, tabs: [OpenTabInfo], context: Context, suggestions: [String],
+                               archived: [ArchivedTab], clipboard: ClipboardHistory,
+                               bitwarden: [BitwardenEntry], now: Date) -> [CommandResult] {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty { return emptyQueryResults(tabs: tabs, clipboard: clipboard, now: now) }
 
@@ -250,12 +278,12 @@ struct CommandBarEngine {
     }
 }
 
-/// Suggestions du moteur de recherche (DuckDuckGo, format `[requête, [suggestions…]]`).
+/// Suggestions du moteur de recherche choisi (format OpenSearch `[requête, [suggestions…]]`).
+/// Rien n'est envoyé si les suggestions sont désactivées ou si le moteur n'en propose pas.
 enum SearchSuggestions {
-    static func requestURL(for query: String) -> URL? {
-        var components = URLComponents(string: "https://duckduckgo.com/ac/")
-        components?.queryItems = [.init(name: "q", value: query), .init(name: "type", value: "list")]
-        return components?.url
+    static func requestURL(for query: String, settings: BrowserSettings = BrowserSettings()) -> URL? {
+        guard settings.searchSuggestions else { return nil }
+        return settings.searchEngine.suggestURL(for: query)
     }
 
     /// Lecture de la réponse ; renvoie une liste vide si le format est inattendu.

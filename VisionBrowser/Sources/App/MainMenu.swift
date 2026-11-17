@@ -20,7 +20,7 @@ enum MainMenu {
             menu.addItem(entry)
         }
         menu.addItem(.separator())
-        menu.addItem(item("Nouvel espace…", #selector(BrowserWindowController.newSpaceAction(_:)), "n", [.command, .control]))
+        menu.addItem(item("Nouvel espace…", #selector(BrowserWindowController.newSpaceAction(_:)), "n", [.command, .shift]))
         menu.addItem(item("Renommer l'espace…", #selector(BrowserWindowController.renameSpaceAction(_:))))
         menu.addItem(item("Supprimer l'espace…", #selector(BrowserWindowController.deleteSpaceAction(_:))))
         menu.addItem(.separator())
@@ -43,6 +43,8 @@ enum MainMenu {
 
         main.addItem(submenu("Vision Browser", [
             item("À propos de Vision Browser", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            .separator(),
+            item("Réglages…", #selector(AppDelegate.showSettings(_:)), ","),
             .separator(),
             item("Masquer Vision Browser", #selector(NSApplication.hide(_:)), "h"),
             item("Masquer les autres", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
@@ -74,9 +76,11 @@ enum MainMenu {
         main.addItem(submenu("Présentation", [
             item("Recharger la page", #selector(BrowserWindowController.reloadAction(_:)), "r"),
             .separator(),
-            item("Vue d'ensemble des onglets", #selector(BrowserWindowController.showOverviewAction(_:)), "\\", [.command, .shift]),
+            item("Vue d'ensemble des onglets", #selector(BrowserWindowController.showOverviewAction(_:)), "o", [.command, .shift]),
+            alternate(#selector(BrowserWindowController.showOverviewAction(_:)), "\\", [.command, .shift]),
             .separator(),
-            item("Zoom avant", #selector(BrowserWindowController.zoomInAction(_:)), "+"),
+            item("Zoom avant", #selector(BrowserWindowController.zoomInAction(_:)), "="),
+            alternate(#selector(BrowserWindowController.zoomInAction(_:)), "+"),
             item("Zoom arrière", #selector(BrowserWindowController.zoomOutAction(_:)), "-"),
             item("Taille réelle", #selector(BrowserWindowController.zoomResetAction(_:)), "0"),
             .separator(),
@@ -84,8 +88,12 @@ enum MainMenu {
         ]))
 
         var tabItems: [NSMenuItem] = [
-            item("Page précédente", #selector(BrowserWindowController.goBackAction(_:)), "["),
-            item("Page suivante", #selector(BrowserWindowController.goForwardAction(_:)), "]"),
+            // ⌘← ⌘→ : tapables sur tous les claviers (⌘[ ⌘] demandent ⌥ sur un clavier français, gardés en secours).
+            // Dans un champ de la page, la page les utilise d'abord (début / fin de ligne).
+            item("Page précédente", #selector(BrowserWindowController.goBackAction(_:)), arrow(NSLeftArrowFunctionKey)),
+            item("Page suivante", #selector(BrowserWindowController.goForwardAction(_:)), arrow(NSRightArrowFunctionKey)),
+            alternate(#selector(BrowserWindowController.goBackAction(_:)), "["),
+            alternate(#selector(BrowserWindowController.goForwardAction(_:)), "]"),
             .separator(),
             item("Onglet suivant", #selector(BrowserWindowController.nextTabAction(_:)), "\t", [.control]),
             item("Onglet précédent", #selector(BrowserWindowController.previousTabAction(_:)), "\t", [.control, .shift]),
@@ -152,6 +160,16 @@ enum MainMenu {
         menu.addItem(.separator())
         commands.forEach { menu.addItem($0.menuItem) }
     }
+
+    /// Raccourci de secours : invisible dans le menu, mais actif (ex. ⌘[ sur un clavier QWERTY).
+    private static func alternate(_ action: Selector, _ key: String, _ modifiers: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
+        let menuItem = item("", action, key, modifiers)
+        menuItem.isHidden = true
+        menuItem.allowsKeyEquivalentWhenHidden = true
+        return menuItem
+    }
+
+    private static func arrow(_ key: Int) -> String { String(Character(UnicodeScalar(UInt32(key))!)) }
 
     private static func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
         let menuItem = NSMenuItem(title: title, action: nil, keyEquivalent: "")

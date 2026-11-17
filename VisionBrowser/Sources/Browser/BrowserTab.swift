@@ -15,6 +15,8 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
     var isPinned = false
     var homeURL: URL?
     weak var owner: BrowserWindowController?
+    /// Onglet dont un lien a ouvert celui-ci (`target=_blank`) : « Précédent » sans historique y ramène.
+    weak var opener: BrowserTab?
     private weak var host: ExtensionHost?
 
     /// La vue de la page si l'onglet est éveillé.

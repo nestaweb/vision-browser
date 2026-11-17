@@ -26,17 +26,11 @@ enum TabGroup: Equatable, Sendable {
 /// Règles de rangement des onglets : ordre récent, veille, archivage, piles, filtre.
 /// Logique pure : l'interface (étagère, vue d'ensemble, Ctrl+Tab) ne fait qu'afficher le résultat.
 enum TabOrganizer {
-    /// Mise en veille après 8 min sans usage (réglable pour les essais : `-VBSleepAfterSeconds 30`).
-    static var sleepAfter: TimeInterval {
-        let value = UserDefaults.standard.double(forKey: "VBSleepAfterSeconds")
-        return value > 0 ? value : 8 * 60
-    }
+    /// Mise en veille après 8 min sans usage par défaut (Réglages ; essais : `-VBSleepAfterSeconds 30`).
+    static var sleepAfter: TimeInterval { BrowserSettings().sleepAfter }
 
-    /// Archivage après 12 h sans consultation (réglable : `-VBArchiveAfterHours 24`).
-    static var archiveAfter: TimeInterval {
-        let value = UserDefaults.standard.double(forKey: "VBArchiveAfterHours")
-        return (value > 0 ? value : 12) * 3600
-    }
+    /// Archivage après 12 h sans consultation par défaut (Réglages ; essais : `-VBArchiveAfterHours 24`).
+    static var archiveAfter: TimeInterval { BrowserSettings().archiveAfter }
 
     /// Nombre d'onglets à partir duquel un site forme une pile.
     static let stackThreshold = 3

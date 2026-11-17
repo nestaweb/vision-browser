@@ -6,9 +6,6 @@ enum AddressInput: Equatable, Sendable {
     case url(URL)
     case search(query: String, url: URL)
 
-    /// Moteur de recherche par défaut (décision D3 encore ouverte : DuckDuckGo en attendant).
-    static let searchTemplate = "https://duckduckgo.com/?q="
-
     var url: URL {
         switch self {
         case .url(let url): url
@@ -16,8 +13,8 @@ enum AddressInput: Equatable, Sendable {
         }
     }
 
-    /// Renvoie `nil` si la saisie est vide.
-    static func parse(_ raw: String) -> AddressInput? {
+    /// Renvoie `nil` si la saisie est vide. Le moteur est celui choisi dans les Réglages.
+    static func parse(_ raw: String, engine: SearchEngine = BrowserSettings().searchEngine) -> AddressInput? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
 
@@ -34,8 +31,8 @@ enum AddressInput: Equatable, Sendable {
         }
 
         // 3. Sinon, recherche.
-        let encoded = text.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? text
-        return .search(query: text, url: URL(string: searchTemplate + encoded)!)
+        guard let url = engine.searchURL(for: text) else { return nil }
+        return .search(query: text, url: url)
     }
 
     private static func looksLikeHost(_ text: String) -> Bool {
@@ -58,13 +55,4 @@ enum AddressInput: Equatable, Sendable {
             || hostOnly.split(separator: ".").allSatisfy { Int($0) != nil }
         return isLocal ? "http://" : "https://"
     }
-}
-
-private extension CharacterSet {
-    /// Caractères autorisés dans une valeur de paramètre (on encode aussi & = + ?).
-    static let urlQueryValueAllowed: CharacterSet = {
-        var set = CharacterSet.urlQueryAllowed
-        set.remove(charactersIn: "&=+?#")
-        return set
-    }()
 }

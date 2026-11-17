@@ -14,9 +14,18 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
     private(set) var isNewTab = false
     var query: String { field.stringValue }
 
+    /// Façon de valider le résultat choisi.
+    enum Submit {
+        /// Entrée : action normale (ouvrir, basculer, remplir…).
+        case normal
+        /// Cmd+Entrée : l'autre onglet (onglet actuel depuis Cmd+T, nouvel onglet depuis Cmd+L).
+        case otherTab
+        /// Option+Entrée : copier (mot de passe Bitwarden, élément du presse-papier, adresse).
+        case copy
+    }
+
     var onQueryChange: ((String) -> Void)?
-    /// Résultat choisi ; `invert` = Cmd+Entrée (inverse onglet courant / nouvel onglet).
-    var onExecute: ((CommandResult?, _ typed: String, _ invert: Bool) -> Void)?
+    var onExecute: ((CommandResult?, _ typed: String, _ mode: Submit) -> Void)?
     var onCancel: (() -> Void)?
 
     static let rowHeight: CGFloat = 46
@@ -87,8 +96,8 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
     func present(text: String, newTab: Bool) {
         isNewTab = newTab
         field.stringValue = text
-        footer.stringValue = newTab ? "↩ ouvrir · ⌘↩ dans l'onglet actuel · ↑↓ choisir · Échap fermer"
-                                    : "↩ ouvrir ici · ⌘↩ dans un nouvel onglet · ↑↓ choisir · Échap fermer"
+        footer.stringValue = newTab ? "↩ ouvrir · ⌘↩ dans l'onglet actuel · ⌥↩ copier · ↑↓ choisir · Échap fermer"
+                                    : "↩ ouvrir ici · ⌘↩ dans un nouvel onglet · ⌥↩ copier · ↑↓ choisir · Échap fermer"
         isHidden = false
         field.selectText(nil)
     }
@@ -113,7 +122,7 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
 
     @objc private func rowClicked() {
         guard results.indices.contains(table.clickedRow) else { return }
-        onExecute?(results[table.clickedRow], query, false)
+        onExecute?(results[table.clickedRow], query, .normal)
     }
 
     // MARK: Clavier
@@ -127,7 +136,9 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
         case #selector(NSResponder.moveUp(_:)):
             select(max(table.selectedRow - 1, 0)); return true
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
-            submit(invert: false); return true
+            // ⌥↩ arrive ici comme « insertNewlineIgnoringFieldEditor » : on lit la touche Option de l'événement.
+            let option = NSApp.currentEvent?.modifierFlags.contains(.option) ?? false
+            submit(option ? .copy : .normal); return true
         case #selector(NSResponder.cancelOperation(_:)):
             onCancel?(); return true
         default:
@@ -140,13 +151,13 @@ final class CommandBarView: NSVisualEffectView, NSTextFieldDelegate, NSTableView
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard !isHidden, flags == .command, event.keyCode == 36 || event.keyCode == 76 else { return super.performKeyEquivalent(with: event) }
-        submit(invert: true)
+        submit(.otherTab)
         return true
     }
 
-    private func submit(invert: Bool) {
+    private func submit(_ mode: Submit) {
         let chosen = results.indices.contains(table.selectedRow) ? results[table.selectedRow] : nil
-        onExecute?(chosen, query, invert)
+        onExecute?(chosen, query, mode)
     }
 
     // MARK: Table
