@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (sinon les tests liraient et réécriraient les vrais onglets de l'utilisateur).
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
         NSApp.mainMenu = MainMenu.build()
+        ClipboardMonitor.shared.start()
         Task {
             // L'extension est chargée AVANT les onglets : elle doit les connaître dès leur premier chargement.
             let report = await host.loadBitwarden()

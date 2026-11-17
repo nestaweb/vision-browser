@@ -22,6 +22,7 @@ Early stage. Nothing here is ready for daily use yet.
 | Phase 2: `Cmd+T` command bar (open tabs, favorites, history with SQLite FTS5, search suggestions, commands) | Done |
 | Phase 3: isolated spaces (separate cookies per space, `Ctrl+1…9`, move a tab between spaces, per-site routing of external links) | Done |
 | Phase 4: tab navigation (recent-first `Ctrl+Tab`, bottom shelf, zoomed-out overview with site stacks and filtering, pinned tabs, tab sleep, auto-archive) | Done |
+| Phase 5: clipboard history (captured on copy and app activation only, never polled; passwords masked, memory-only, Touch ID, 10-minute expiry) | Done |
 
 What phase 0 has verified so far:
 

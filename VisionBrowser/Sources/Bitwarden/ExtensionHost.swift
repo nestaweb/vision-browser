@@ -78,7 +78,15 @@ final class ExtensionHost: NSObject, WKWebExtensionControllerDelegate {
                                 for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
         guard let popover = action.popupPopover, let anchor = window?.popupAnchor else { return completionHandler(nil) }
         popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        // Ce qui est copié pendant que le popup est ouvert vient de Bitwarden : traité comme un secret.
+        ClipboardMonitor.shared.bitwardenPopupDidOpen()
+        NotificationCenter.default.addObserver(self, selector: #selector(popupDidClose(_:)), name: NSPopover.didCloseNotification, object: popover)
         completionHandler(nil)
+    }
+
+    @objc private func popupDidClose(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self, name: NSPopover.didCloseNotification, object: notification.object)
+        ClipboardMonitor.shared.bitwardenPopupDidClose()
     }
 
     /// Pages internes de l'extension : fenêtre dédiée. Sites web : nouvel onglet.

@@ -91,6 +91,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         DownloadManager.shared.onFinished = { [weak self] url in
             self?.domainToast.show(text: "Téléchargé : \(url.lastPathComponent)", symbol: "arrow.down.circle.fill", tint: .systemBlue)
         }
+        CopyRelay.shared.onCopy = { [weak self] webView in
+            let tab = self?.allTabs.first { $0.liveWebView === webView }
+            ClipboardMonitor.shared.checkSoon(source: DomainPolicy.displayHost(for: tab?.url))
+        }
+        ClipboardMonitor.shared.onChange = { [weak self] in
+            guard let self, !self.commandBar.isHidden else { return }
+            self.refreshResults(for: self.commandBar.query, keepSelection: true)
+        }
         EscapeRelay.shared.onUnhandledEscape = { [weak self] webView in
             guard let self, webView != nil, webView === self.displayedTab?.liveWebView else { return }
             self.showOverview()
@@ -556,6 +564,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func runMaintenance() {
         let now = Date()
+        ClipboardMonitor.shared.purge(now: now)
         let infos = allTabs.map(info)
         let sleepers = TabOrganizer.sleepCandidates(infos, activeID: displayedTab?.id, now: now).compactMap(tab)
         if !sleepers.isEmpty {
@@ -601,6 +610,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Renvoie vrai si l'événement est consommé.
     private func handleSwitcherEvent(_ event: NSEvent) -> Bool {
+        // Cmd+C / Cmd+X (pages, barre Cmd+T, champs de l'app) : le presse-papier sera relu juste après.
+        if event.type == .keyDown, event.modifierFlags.contains(.command),
+           let key = event.charactersIgnoringModifiers?.lowercased(), key == "c" || key == "x" {
+            ClipboardMonitor.shared.checkSoon(source: DomainPolicy.displayHost(for: displayedTab?.url) ?? "Vision Browser")
+            return false
+        }
         if event.type == .flagsChanged {
             if !switcherTabs.isEmpty && !event.modifierFlags.contains(.control) { commitSwitcher() }
             return false
@@ -864,8 +879,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     /// Résultats locaux immédiatement, puis suggestions du moteur de recherche dès qu'elles arrivent.
-    private func refreshResults(for query: String) {
-        commandBar.show(results: engine.results(for: query, tabs: openTabInfos, context: commandContext, archived: archived))
+    private func refreshResults(for query: String, keepSelection: Bool = false) {
+        commandBar.show(results: localResults(for: query), keepSelection: keepSelection)
         suggestionTask?.cancel()
         guard case .search? = AddressInput.parse(query) else { return }
         suggestionTask = Task { [weak self] in
@@ -873,8 +888,36 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             guard !Task.isCancelled else { return }
             let suggestions = await SearchSuggestions.fetch(query)
             guard !Task.isCancelled, let self, !self.commandBar.isHidden, self.commandBar.query == query else { return }
-            self.commandBar.show(results: self.engine.results(for: query, tabs: self.openTabInfos, context: self.commandContext,
-                                                             suggestions: suggestions, archived: self.archived), keepSelection: true)
+            self.commandBar.show(results: self.localResults(for: query, suggestions: suggestions), keepSelection: true)
+        }
+    }
+
+    private func localResults(for query: String, suggestions: [String] = []) -> [CommandResult] {
+        engine.results(for: query, tabs: openTabInfos, context: commandContext, suggestions: suggestions,
+                       archived: archived, clipboard: ClipboardMonitor.shared.history)
+    }
+
+    /// Presse-papier : Entrée ouvre un lien ou colle dans le champ actif de la page ;
+    /// Cmd+Entrée remet l'élément dans le presse-papier. Touch ID d'abord pour un secret.
+    private func useClipboardItem(_ id: UUID, copyOnly: Bool) {
+        guard let item = ClipboardMonitor.shared.history.items.first(where: { $0.id == id }) else { return }
+        if item.kind == .link, !copyOnly, let url = item.url {
+            newTab(url: url, activate: true)
+            return
+        }
+        Task { [weak self] in
+            if item.kind == .secret {
+                let reason = copyOnly ? "copier le mot de passe gardé dans l'historique" : "coller le mot de passe gardé dans l'historique"
+                guard await ClipboardMonitor.authenticate(reason: reason) else { return }
+            }
+            guard let self else { return }
+            if copyOnly {
+                ClipboardMonitor.shared.write(item)
+                self.domainToast.show(text: item.kind == .secret ? "Copié (masqué)" : "Copié", symbol: "doc.on.clipboard.fill", tint: .systemPurple)
+            } else {
+                if let view = self.displayedTab?.liveWebView { self.window?.makeFirstResponder(view) }
+                ClipboardMonitor.shared.paste(item)
+            }
         }
     }
 
@@ -891,6 +934,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             if let tab = tab(id) { select(tab) }
         case .archived(let id, _):
             reopenArchived(id)
+        case .clipboard(let id, _, _):
+            useClipboardItem(id, copyOnly: invert)
         case .command(.copyAddress):
             guard let url = activeTab?.url else { return }
             NSPasteboard.general.clearContents()

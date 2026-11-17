@@ -6,6 +6,8 @@ struct CommandResult: Equatable, Sendable {
         case openTab(id: UUID, space: String)
         /// Onglet rangé automatiquement : le rouvrir dans son espace.
         case archived(id: UUID, space: String)
+        /// Élément du presse-papier : ouvrir le lien, ou coller (Touch ID pour un secret).
+        case clipboard(id: UUID, kind: ClipboardItem.Kind, bitwarden: Bool)
         case favorite
         case history
         case address
@@ -36,6 +38,7 @@ struct CommandResult: Equatable, Sendable {
         switch kind {
         case .openTab: "Basculer"
         case .archived: "Rouvrir"
+        case .clipboard(_, let kind, _): kind == .link ? "Ouvrir" : "Coller"
         case .favorite, .history, .address: "Ouvrir"
         case .search, .suggestion: "Rechercher"
         case .command: "Exécuter"
@@ -71,10 +74,11 @@ struct CommandBarEngine {
 
     static let maxResults = 9
 
+    /// - Parameter clipboard: l'historique du presse-papier (le moteur y cherche lui-même).
     func results(for rawQuery: String, tabs: [OpenTabInfo], context: Context, suggestions: [String] = [],
-                 archived: [ArchivedTab] = []) -> [CommandResult] {
+                 archived: [ArchivedTab] = [], clipboard: ClipboardHistory = ClipboardHistory(), now: Date = Date()) -> [CommandResult] {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty { return emptyQueryResults(tabs: tabs) }
+        if query.isEmpty { return emptyQueryResults(tabs: tabs, clipboard: clipboard, now: now) }
 
         var results: [CommandResult] = []
         let tokens = PlacesStore.tokens(query)
@@ -128,6 +132,12 @@ struct CommandBarEngine {
                                  subtitle: host, url: place.url, isFavorite: place.isFavorite, score: place.score))
         }
 
+        // Presse-papier : sous les onglets ouverts ; en tête si l'on tape « presse-papier », « copie »…
+        let wantsClipboard = ClipboardHistory.wantsEverything(tokens)
+        for (index, item) in clipboard.search(query).enumerated() {
+            results.append(clipboardResult(item, now: now, score: (wantsClipboard ? 95 : 50) - Double(index)))
+        }
+
         // 5. Commandes : proposées quand un mot de leur nom commence par ce qu'on tape.
         results += commands(matching: tokens, context: context)
 
@@ -142,7 +152,7 @@ struct CommandBarEngine {
     }
 
     /// `Cmd+T` sans rien taper : les onglets ouverts (récents d'abord), puis les favoris.
-    func emptyQueryResults(tabs: [OpenTabInfo]) -> [CommandResult] {
+    func emptyQueryResults(tabs: [OpenTabInfo], clipboard: ClipboardHistory = ClipboardHistory(), now: Date = Date()) -> [CommandResult] {
         let recent = tabs.sorted { $0.lastActivated > $1.lastActivated }.prefix(6).enumerated().map { index, tab in
             CommandResult(kind: .openTab(id: tab.id, space: tab.space), title: tab.title?.nonEmpty ?? PlacesStore.host(tab.url ?? URL(string: "about:blank")!),
                           subtitle: tab.url.map(PlacesStore.host) ?? "", url: tab.url, score: 100 - Double(index))
@@ -152,7 +162,19 @@ struct CommandBarEngine {
             CommandResult(kind: .favorite, title: place.title?.nonEmpty ?? PlacesStore.host(place.url), subtitle: PlacesStore.host(place.url),
                           url: place.url, isFavorite: true, score: 50 - Double(index))
         }
-        return Array((recent + favorites).prefix(Self.maxResults))
+        // Ce qu'on vient de copier (moins de 5 min) : souvent, on ouvre Cmd+T précisément pour ça.
+        let justCopied = clipboard.items.first.flatMap { now.timeIntervalSince($0.copiedAt) < 300 ? $0 : nil }
+            .map { [clipboardResult($0, now: now, score: 75)] } ?? []
+        return Array((recent + justCopied + favorites).sorted { $0.score > $1.score }.prefix(Self.maxResults))
+    }
+
+    private func clipboardResult(_ item: ClipboardItem, now: Date, score: Double) -> CommandResult {
+        let origin = item.source.map { " · \($0)" } ?? ""
+        let label = item.kind == .secret ? (item.fromBitwarden ? "Mot de passe" : "Secret") : "Copié"
+        return CommandResult(kind: .clipboard(id: item.id, kind: item.kind, bitwarden: item.fromBitwarden),
+                             title: ClipboardHistory.preview(of: item),
+                             subtitle: "\(label) \(ClipboardHistory.age(of: item.copiedAt, now: now))\(origin)",
+                             url: item.url, score: score)
     }
 
     private func commands(matching tokens: [String], context: Context) -> [CommandResult] {

@@ -135,6 +135,31 @@ final class CommandBarEngineTests: XCTestCase {
         if case .archived = pages.first?.kind {} else { XCTFail("la version archivée est gardée") }
     }
 
+    func testClipboardResults() throws {
+        let history = ClipboardHistory(items: [
+            ClipboardItem(kind: .secret, text: "hunter2", source: "Bitwarden", copiedAt: now.addingTimeInterval(-60), fromBitwarden: true),
+            ClipboardItem(kind: .link, text: "https://books.zoho.eu/facture/42", source: "Mail", copiedAt: now.addingTimeInterval(-600)),
+        ])
+        let e = try engine()
+        let facture = e.results(for: "facture", tabs: [], context: context, clipboard: history, now: now)
+            .first { if case .clipboard = $0.kind { true } else { false } }
+        XCTAssertEqual(facture?.actionLabel, "Ouvrir")
+        XCTAssertEqual(facture?.subtitle, "Copié il y a 10 min · Mail")
+        let password = e.results(for: "mot de passe", tabs: [], context: context, clipboard: history, now: now).first
+        XCTAssertEqual(password?.title, "••••••••", "jamais le mot de passe en clair")
+        XCTAssertEqual(password?.actionLabel, "Coller")
+        let all = e.results(for: "presse", tabs: [], context: context, clipboard: history, now: now)
+        XCTAssertEqual(all.prefix(2).filter { if case .clipboard = $0.kind { true } else { false } }.count, 2, "« presse » met l'historique en tête")
+    }
+
+    func testJustCopiedShowsOnEmptyQuery() throws {
+        let fresh = ClipboardHistory(items: [ClipboardItem(kind: .text, text: "Réf. 2026-118", copiedAt: now.addingTimeInterval(-30))])
+        let results = try engine().results(for: "", tabs: [tab("https://a.com", "A")], context: context, clipboard: fresh, now: now)
+        XCTAssertEqual(results.map(\.title), ["A", "Réf. 2026-118"])
+        let old = ClipboardHistory(items: [ClipboardItem(kind: .text, text: "vieux", copiedAt: now.addingTimeInterval(-900))])
+        XCTAssertFalse(try engine().results(for: "", tabs: [], context: context, clipboard: old, now: now).contains { $0.title == "vieux" })
+    }
+
     func testSuggestionParsing() {
         XCTAssertEqual(SearchSuggestions.parse(Data(#"["swi",["swift","swiftui"]]"#.utf8)), ["swift", "swiftui"])
         XCTAssertEqual(SearchSuggestions.parse(Data("{}".utf8)), [])

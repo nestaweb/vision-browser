@@ -247,6 +247,7 @@ private final class ResultCellView: NSTableCellView {
         switch result.kind {
         case .openTab(_, let space): showPill("Ouvert · \(space)", color: .systemGreen)
         case .archived(_, let space): showPill(space.isEmpty ? "Archivé" : "Archivé · \(space)", color: .systemBrown)
+        case .clipboard(_, .secret, let bitwarden): showPill(bitwarden ? "Bitwarden · Touch ID" : "Masqué · Touch ID", color: bitwarden ? .systemBlue : .systemRed)
         default: pill.isHidden = true
         }
     }
@@ -263,6 +264,9 @@ private final class ResultCellView: NSTableCellView {
         switch kind {
         case .openTab: ("square.on.square", .systemGreen)
         case .archived: ("archivebox.fill", .systemBrown)
+        case .clipboard(_, .secret, _): ("key.fill", .systemRed)
+        case .clipboard(_, .link, _): ("link", .systemPurple)
+        case .clipboard: ("doc.on.clipboard.fill", .systemPurple)
         case .favorite: ("star.fill", .systemYellow)
         case .history: ("clock", .systemGray)
         case .address: ("globe", .systemBlue)
