@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Xcode / builds
+build/
+DerivedData/
+*.xcodeproj/
+xcuserdata/
+
+# Builds Bitwarden téléchargés (non redistribués ici, récupérables depuis les versions officielles)
+prototypes/phase0/Extensions/
