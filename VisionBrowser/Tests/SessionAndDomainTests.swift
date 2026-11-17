@@ -2,12 +2,28 @@ import XCTest
 @testable import Vision_Browser
 
 final class SessionStoreTests: XCTestCase {
-    func testRoundTrip() throws {
-        let snapshot = SessionSnapshot(tabs: [
-            .init(url: URL(string: "https://crm.zoho.eu")!, title: "CRM"),
-            .init(url: URL(string: "https://github.com")!, title: nil),
-        ], activeIndex: 1)
+    private let perso = SpacesConfig.defaultSpaceID
+    private let proB = UUID()
+
+    func testRoundTripWithSpaces() throws {
+        let snapshot = SessionSnapshot(spaces: [
+            .init(spaceID: perso, tabs: [.init(url: URL(string: "https://github.com")!, title: "GitHub")], activeIndex: 0),
+            .init(spaceID: proB, tabs: [.init(url: URL(string: "https://crm.zoho.eu")!, title: "CRM"),
+                                        .init(url: URL(string: "https://mail.zoho.eu")!, title: nil)], activeIndex: 1),
+        ], activeSpaceID: proB)
         XCTAssertEqual(SessionStore.decode(try SessionStore.encode(snapshot)), snapshot)
+    }
+
+    /// La session de la phase 1 (sans espaces) doit être reprise dans l'espace par défaut.
+    func testPhaseOneSessionIsMigrated() {
+        let legacy = Data("""
+        {"activeIndex": 1, "tabs": [{"url": "https://accounts.zoho.com/signin", "title": ""},
+                                    {"url": "https://github.com/nestaweb/vision-browser", "title": "GitHub"}], "version": 1}
+        """.utf8)
+        let snapshot = SessionStore.decode(legacy)
+        XCTAssertEqual(snapshot.activeSpaceID, perso)
+        XCTAssertEqual(snapshot.tabs(in: perso)?.tabs.map(\.url.host), ["accounts.zoho.com", "github.com"])
+        XCTAssertEqual(snapshot.tabs(in: perso)?.activeIndex, 1)
     }
 
     func testCorruptDataGivesEmptySession() {
@@ -15,20 +31,21 @@ final class SessionStoreTests: XCTestCase {
     }
 
     func testActiveIndexIsClampedAndNonWebTabsDropped() throws {
-        let snapshot = SessionSnapshot(tabs: [
+        let snapshot = SessionSnapshot(spaces: [.init(spaceID: perso, tabs: [
             .init(url: URL(string: "https://a.com")!, title: nil),
             .init(url: URL(string: "file:///etc/hosts")!, title: nil),
-        ], activeIndex: 7)
+        ], activeIndex: 7)], activeSpaceID: perso)
         let decoded = SessionStore.decode(try SessionStore.encode(snapshot))
-        XCTAssertEqual(decoded.tabs.map(\.url.absoluteString), ["https://a.com"])
-        XCTAssertEqual(decoded.activeIndex, 0)
+        XCTAssertEqual(decoded.tabs(in: perso)?.tabs.map(\.url.absoluteString), ["https://a.com"])
+        XCTAssertEqual(decoded.tabs(in: perso)?.activeIndex, 0)
     }
 
     func testFileRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = SessionStore(fileURL: dir.appendingPathComponent("session.json"))
         XCTAssertEqual(store.load(), .empty)
-        let snapshot = SessionSnapshot(tabs: [.init(url: URL(string: "https://zoho.com")!, title: "Zoho")], activeIndex: 0)
+        let snapshot = SessionSnapshot(spaces: [.init(spaceID: perso, tabs: [.init(url: URL(string: "https://zoho.com")!, title: "Zoho")], activeIndex: 0)],
+                                       activeSpaceID: perso)
         store.save(snapshot)
         XCTAssertEqual(store.load(), snapshot)
         try? FileManager.default.removeItem(at: dir)

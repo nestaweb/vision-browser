@@ -12,9 +12,14 @@ struct CommandResult: Equatable, Sendable {
         case command(CommandID)
     }
 
-    enum CommandID: String, Sendable, CaseIterable {
+    enum CommandID: Equatable, Sendable {
         case copyAddress
         case toggleFavorite
+        case newSpace
+        case switchSpace(UUID)
+        case moveTab(UUID)
+        /// « Toujours ouvrir ce site dans cet espace » (règle de routage).
+        case routeHostHere
     }
 
     var kind: Kind
@@ -50,10 +55,15 @@ struct OpenTabInfo: Sendable {
 struct CommandBarEngine {
     let places: PlacesStore?
 
-    /// Contexte de la commande « favori » (l'onglet actif).
+    /// Contexte des commandes : onglet actif et espaces.
     struct Context: Sendable {
+        struct SpaceInfo: Sendable { var id: UUID; var name: String }
         var activeURL: URL?
         var activeIsFavorite: Bool
+        var spaces: [SpaceInfo] = []
+        var currentSpaceID: UUID?
+        /// Espace où une règle envoie déjà le site actuel (pour ne pas proposer une règle inutile).
+        var routedSpaceForActiveHost: UUID?
     }
 
     static let maxResults = 9
@@ -124,11 +134,24 @@ struct CommandBarEngine {
     }
 
     private func commands(matching tokens: [String], context: Context) -> [CommandResult] {
-        guard let first = tokens.first, first.count >= 2, context.activeURL != nil else { return [] }
-        let catalog: [(CommandResult.CommandID, String, String)] = [
-            (.copyAddress, "Copier l'adresse", "copier adresse url lien"),
-            (.toggleFavorite, context.activeIsFavorite ? "Retirer des favoris" : "Ajouter aux favoris", "favori favoris ajouter retirer etoile"),
+        guard let first = tokens.first, first.count >= 2 else { return [] }
+        var catalog: [(CommandResult.CommandID, String, String)] = [
+            (.newSpace, "Nouvel espace", "nouvel nouveau espace creer"),
         ]
+        let others = context.spaces.filter { $0.id != context.currentSpaceID }
+        catalog += others.map { (.switchSpace($0.id), "Aller à l'espace « \($0.name) »", "aller espace basculer \($0.name)") }
+        if let url = context.activeURL {
+            catalog += [
+                (.copyAddress, "Copier l'adresse", "copier adresse url lien"),
+                (.toggleFavorite, context.activeIsFavorite ? "Retirer des favoris" : "Ajouter aux favoris", "favori favoris ajouter retirer etoile"),
+            ]
+            catalog += others.map { (.moveTab($0.id), "Envoyer l'onglet vers « \($0.name) »", "envoyer deplacer onglet espace \($0.name)") }
+            let host = PlacesStore.host(url)
+            if !host.isEmpty, let current = context.spaces.first(where: { $0.id == context.currentSpaceID }),
+               context.routedSpaceForActiveHost != current.id {
+                catalog.append((.routeHostHere, "Toujours ouvrir \(host) dans « \(current.name) »", "toujours ouvrir regle lien espace \(host)"))
+            }
+        }
         return catalog.compactMap { id, title, keywords in
             let words = Self.normalize(keywords).split(separator: " ")
             guard tokens.allSatisfy({ token in words.contains { $0.hasPrefix(token) } }) else { return nil }

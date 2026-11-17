@@ -114,7 +114,7 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
         // Cmd+clic sur un lien : nouvel onglet en arrière-plan, comme dans tous les navigateurs.
         if navigationAction.navigationType == .linkActivated, navigationAction.modifierFlags.contains(.command),
            let url = navigationAction.request.url {
-            owner?.newTab(url: url, activate: navigationAction.modifierFlags.contains(.shift))
+            owner?.newTab(url: url, in: space, activate: navigationAction.modifierFlags.contains(.shift))
             decisionHandler(.cancel)
             return
         }
@@ -137,10 +137,10 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
 
     // MARK: Interface demandée par la page
 
-    /// `target=_blank` et `window.open` : nouvel onglet avec la configuration fournie par WebKit.
+    /// `target=_blank` et `window.open` : nouvel onglet, dans le même espace, avec la configuration fournie par WebKit.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        owner?.newTab(configuration: configuration, request: navigationAction.request)?.webView
+        owner?.newTab(configuration: configuration, from: self).webView
     }
 
     func webViewDidClose(_ webView: WKWebView) {

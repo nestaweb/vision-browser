@@ -5,6 +5,36 @@ import AppKit
 @MainActor
 enum MainMenu {
     static let bitwardenMenuTitle = "Bitwarden"
+    static let spacesMenuTitle = "Espaces"
+
+    /// Reconstruit le menu « Espaces » : liste (Ctrl+1…9, coche sur l'espace affiché), gestion, envoi d'onglet.
+    static func updateSpacesMenu(for browser: BrowserWindowController) {
+        guard let menu = NSApp.mainMenu?.item(withTitle: spacesMenuTitle)?.submenu else { return }
+        menu.removeAllItems()
+        for (index, space) in browser.spaces.enumerated() {
+            let entry = item(space.name, #selector(BrowserWindowController.switchSpaceByNumberAction(_:)),
+                             index < 9 ? "\(index + 1)" : "", [.control])
+            entry.tag = index + 1
+            entry.image = space.swatch
+            entry.state = space === browser.currentSpace ? .on : .off
+            menu.addItem(entry)
+        }
+        menu.addItem(.separator())
+        menu.addItem(item("Nouvel espace…", #selector(BrowserWindowController.newSpaceAction(_:)), "n", [.command, .control]))
+        menu.addItem(item("Renommer l'espace…", #selector(BrowserWindowController.renameSpaceAction(_:))))
+        menu.addItem(item("Supprimer l'espace…", #selector(BrowserWindowController.deleteSpaceAction(_:))))
+        menu.addItem(.separator())
+        let others = browser.spaces.filter { $0 !== browser.currentSpace }
+        let move = submenu("Envoyer l'onglet vers", others.map { space in
+            let entry = item(space.name, #selector(BrowserWindowController.moveTabToSpaceAction(_:)))
+            entry.representedObject = space.id
+            entry.image = space.swatch
+            return entry
+        })
+        move.isEnabled = !others.isEmpty
+        menu.addItem(move)
+        menu.addItem(item("Toujours ouvrir ce site dans cet espace", #selector(BrowserWindowController.routeHostHereAction(_:))))
+    }
 
     static func build() -> NSMenu {
         let main = NSMenu()
@@ -62,6 +92,9 @@ enum MainMenu {
             tabItems.append(menuItem)
         }
         main.addItem(submenu("Navigation", tabItems))
+
+        // Rempli par `updateSpacesMenu` (la liste des espaces change à l'usage).
+        main.addItem(submenu(spacesMenuTitle, []))
 
         let bitwarden = submenu(bitwardenMenuTitle, [
             item("Ouvrir Bitwarden", #selector(BrowserWindowController.openBitwardenAction(_:)), "b", [.command, .shift]),

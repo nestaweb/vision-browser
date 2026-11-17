@@ -32,7 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             report.forEach { NSLog("Vision Browser · Bitwarden : \($0)") }
             MainMenu.installBitwardenMenu(host: host)
 
-            let controller = BrowserWindowController(host: host, session: SessionStore.default)
+            let controller = BrowserWindowController(host: host, session: .default, spacesStore: .default)
+            controller.onSpacesChanged = { [weak controller] in
+                if let controller { MainMenu.updateSpacesMenu(for: controller) }
+            }
             browser = controller
             controller.showWindow(nil)
             controller.restoreSession(extraURLs: pendingURLs)
@@ -41,10 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Liens ouverts depuis une autre app (Vision Browser comme navigateur par défaut).
+    /// Liens ouverts depuis une autre app (Vision Browser comme navigateur par défaut) :
+    /// une règle de routage choisit l'espace (ex. crm.zoho.eu → « Pro B »), sinon l'espace affiché.
     func application(_ application: NSApplication, open urls: [URL]) {
         let web = urls.filter { ["http", "https", "file"].contains($0.scheme?.lowercased() ?? "") }
-        if let browser { web.forEach { browser.newTab(url: $0, activate: true) } }
+        if let browser { web.forEach(browser.openExternal) }
         else { pendingURLs.append(contentsOf: web) }
     }
 

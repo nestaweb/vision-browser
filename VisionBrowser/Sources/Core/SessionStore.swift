@@ -1,17 +1,25 @@
 import Foundation
 
-/// Instantané des onglets ouverts, pour les rouvrir au lancement suivant.
+/// Instantané des onglets ouverts, rangés par espace, pour les rouvrir au lancement suivant.
 struct SessionSnapshot: Codable, Equatable, Sendable {
     struct TabRecord: Codable, Equatable, Sendable {
         var url: URL
         var title: String?
     }
 
-    var version = 1
-    var tabs: [TabRecord]
-    var activeIndex: Int
+    struct SpaceTabs: Codable, Equatable, Sendable {
+        var spaceID: UUID
+        var tabs: [TabRecord]
+        var activeIndex: Int
+    }
 
-    static let empty = SessionSnapshot(tabs: [], activeIndex: 0)
+    var version = 2
+    var spaces: [SpaceTabs]
+    var activeSpaceID: UUID?
+
+    static let empty = SessionSnapshot(spaces: [], activeSpaceID: nil)
+
+    func tabs(in spaceID: UUID) -> SpaceTabs? { spaces.first { $0.spaceID == spaceID } }
 }
 
 /// Lecture et écriture de la session sur disque (JSON).
@@ -29,11 +37,29 @@ struct SessionStore: Sendable {
         return try encoder.encode(snapshot)
     }
 
+    /// Format de la phase 1 (un seul espace) : migré vers l'espace par défaut.
+    private struct LegacySnapshot: Decodable {
+        var tabs: [SessionSnapshot.TabRecord]
+        var activeIndex: Int
+    }
+
     /// Une session illisible ou incohérente donne une session vide plutôt qu'un plantage.
-    static func decode(_ data: Data) -> SessionSnapshot {
-        guard var snapshot = try? JSONDecoder().decode(SessionSnapshot.self, from: data) else { return .empty }
-        snapshot.tabs = snapshot.tabs.filter { ["http", "https"].contains($0.url.scheme?.lowercased() ?? "") }
-        snapshot.activeIndex = snapshot.tabs.isEmpty ? 0 : min(max(snapshot.activeIndex, 0), snapshot.tabs.count - 1)
+    static func decode(_ data: Data, defaultSpaceID: UUID = SpacesConfig.defaultSpaceID) -> SessionSnapshot {
+        var snapshot: SessionSnapshot
+        if let current = try? JSONDecoder().decode(SessionSnapshot.self, from: data) {
+            snapshot = current
+        } else if let legacy = try? JSONDecoder().decode(LegacySnapshot.self, from: data) {
+            snapshot = SessionSnapshot(spaces: [.init(spaceID: defaultSpaceID, tabs: legacy.tabs, activeIndex: legacy.activeIndex)],
+                                       activeSpaceID: defaultSpaceID)
+        } else {
+            return .empty
+        }
+        snapshot.spaces = snapshot.spaces.map { space in
+            var space = space
+            space.tabs = space.tabs.filter { ["http", "https"].contains($0.url.scheme?.lowercased() ?? "") }
+            space.activeIndex = space.tabs.isEmpty ? 0 : min(max(space.activeIndex, 0), space.tabs.count - 1)
+            return space
+        }
         return snapshot
     }
 

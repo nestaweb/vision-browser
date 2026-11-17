@@ -31,6 +31,8 @@ final class TrafficLightZone: NSView {
 final class DomainToastView: NSVisualEffectView {
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
+    private let spaceDot = NSView()
+    private let spaceLabel = NSTextField(labelWithString: "")
     private var hideTask: Task<Void, Never>?
 
     init() {
@@ -44,7 +46,15 @@ final class DomainToastView: NSVisualEffectView {
         label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
         label.textColor = .labelColor
         icon.symbolConfiguration = .init(pointSize: 11, weight: .semibold)
-        let stack = NSStackView(views: [icon, label])
+        spaceDot.wantsLayer = true
+        spaceDot.layer?.cornerRadius = 4
+        spaceDot.translatesAutoresizingMaskIntoConstraints = false
+        spaceDot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+        spaceDot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        spaceLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        spaceLabel.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [icon, label, spaceDot, spaceLabel])
+        stack.setCustomSpacing(12, after: label)
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -58,10 +68,15 @@ final class DomainToastView: NSVisualEffectView {
     required init?(coder: NSCoder) { fatalError("non utilisé") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func show(text: String, symbol: String, tint: NSColor) {
+    /// - Parameter space: nom et couleur de l'espace à rappeler (deux comptes Zoho se ressemblent).
+    func show(text: String, symbol: String, tint: NSColor, space: (name: String, color: NSColor)? = nil) {
         label.stringValue = text
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.contentTintColor = tint
+        spaceDot.isHidden = space == nil
+        spaceLabel.isHidden = space == nil
+        spaceDot.layer?.backgroundColor = space?.color.cgColor
+        spaceLabel.stringValue = space?.name ?? ""
         let view = self
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15

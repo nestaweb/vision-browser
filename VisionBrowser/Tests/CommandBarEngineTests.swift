@@ -86,6 +86,31 @@ final class CommandBarEngineTests: XCTestCase {
         XCTAssertEqual(pages.first?.kind, .favorite, "la version en favori est gardée")
     }
 
+    func testSpaceCommands() throws {
+        let perso = UUID(), proB = UUID()
+        let spaces = CommandBarEngine.Context(activeURL: URL(string: "https://crm.zoho.eu/home"), activeIsFavorite: false,
+                                              spaces: [.init(id: perso, name: "Perso"), .init(id: proB, name: "Pro B")],
+                                              currentSpaceID: perso)
+        let e = try engine()
+        let commandKinds = { (query: String) in e.results(for: query, tabs: [], context: spaces).compactMap { result -> CommandResult.CommandID? in
+            if case .command(let id) = result.kind { return id }; return nil } }
+        XCTAssertTrue(commandKinds("nouvel esp").contains(.newSpace))
+        XCTAssertTrue(commandKinds("aller pro").contains(.switchSpace(proB)))
+        XCTAssertFalse(commandKinds("aller perso").contains(.switchSpace(perso)), "on ne propose pas d'aller dans l'espace actuel")
+        XCTAssertTrue(commandKinds("envoyer pro b").contains(.moveTab(proB)))
+        XCTAssertTrue(commandKinds("toujours").contains(.routeHostHere))
+        var routed = spaces
+        routed.routedSpaceForActiveHost = perso
+        XCTAssertFalse(e.results(for: "toujours", tabs: [], context: routed).contains { $0.kind == .command(.routeHostHere) },
+                       "règle déjà en place : rien à proposer")
+    }
+
+    func testSpaceCommandsWithoutActivePage() throws {
+        let ctx = CommandBarEngine.Context(activeURL: nil, activeIsFavorite: false, spaces: [.init(id: UUID(), name: "Perso")], currentSpaceID: nil)
+        let results = try engine().results(for: "nouvel", tabs: [], context: ctx)
+        XCTAssertTrue(results.contains { $0.kind == .command(.newSpace) }, "créer un espace n'a pas besoin de page ouverte")
+    }
+
     func testSuggestionParsing() {
         XCTAssertEqual(SearchSuggestions.parse(Data(#"["swi",["swift","swiftui"]]"#.utf8)), ["swift", "swiftui"])
         XCTAssertEqual(SearchSuggestions.parse(Data("{}".utf8)), [])

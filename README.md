@@ -20,6 +20,7 @@ Early stage. Nothing here is ready for daily use yet.
 | Phase 0 prototype: isolated spaces + Bitwarden in WebKit | In progress: [prototypes/phase0](prototypes/phase0) |
 | Phase 1: the real app (full-window pages, tabs, address bar, domain indicator, Bitwarden) | Done: [VisionBrowser](VisionBrowser) |
 | Phase 2: `Cmd+T` command bar (open tabs, favorites, history with SQLite FTS5, search suggestions, commands) | Done |
+| Phase 3: isolated spaces (separate cookies per space, `Ctrl+1…9`, move a tab between spaces, per-site routing of external links) | Done |
 
 What phase 0 has verified so far:
 
