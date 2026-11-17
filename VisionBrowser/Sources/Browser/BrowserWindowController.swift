@@ -504,6 +504,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func tab(_ id: UUID) -> BrowserTab? { allTabs.first { $0.id == id } }
 
     func tabDidChangeURL(_ tab: BrowserTab) {
+        // Remplissage en attente : on n'attend pas la fin du chargement de la nouvelle page.
+        resumeFill(in: tab)
         if let url = tab.url { places?.recordVisit(url: url, title: tab.title) }
         if tab === activeTab { updateChrome(announce: DomainPolicy.shouldAnnounce(previous: tab.previousURL, next: tab.url)) }
         scheduleSessionSave()
@@ -516,9 +518,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Page chargée : sa carte est rafraîchie peu après (le temps que la page se dessine).
     func tabDidFinishLoading(_ tab: BrowserTab) {
-        if let fill = pendingFills[tab.id] {
-            if fill.expires < Date() { pendingFills[tab.id] = nil } else { runFill(fill, in: tab) }
-        }
+        resumeFill(in: tab)
         guard tab === displayedTab else { return }
         Task { [weak tab] in
             try? await Task.sleep(for: .milliseconds(600))
@@ -1006,42 +1006,64 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func useBitwardenItem(_ id: String, copyOnly: Bool) {
         let service = BitwardenService.shared
         guard let item = service.vault.items.first(where: { $0.id == id }) else { return }
-        Task { [weak self] in
-            let reason = copyOnly ? "copier le mot de passe « \(item.name) »" : "remplir l'identifiant « \(item.name) »"
-            guard await service.authenticate(reason: reason) else { return }
-            let credentials: (username: String?, password: String?)
-            do { credentials = try await service.credentials(for: id) } catch {
-                self?.showError("Bitwarden", error)
-                return
-            }
-            guard let self else { return }
-            if copyOnly {
-                guard let password = credentials.password else { return }
-                let clip = ClipboardItem(kind: .secret, text: password, source: "Bitwarden", copiedAt: Date(), fromBitwarden: true)
-                ClipboardMonitor.shared.write(clip)
-                ClipboardMonitor.shared.record(clip)
-                ClipboardMonitor.shared.clearLater(after: .seconds(90))
-                self.domainToast.show(text: "Mot de passe copié (effacé dans 90 s)", symbol: "key.fill", tint: .systemBlue)
-                return
-            }
-            guard let url = item.loginURL else {
-                return self.domainToast.show(text: "Pas d'adresse web pour « \(item.name) »", symbol: "exclamationmark.triangle.fill", tint: .systemOrange)
-            }
-            let space = service.vault.spaceID(for: item, config: self.config).flatMap(self.space) ?? self.currentSpace
-            let tab = self.newTab(url: url, in: space, activate: true)
-            self.pendingFills[tab.id] = PendingFill(item: item, username: credentials.username, password: credentials.password,
-                                                    expires: Date().addingTimeInterval(180))
+        if copyOnly { return copyBitwardenPassword(item) }
+        guard let url = item.loginURL else {
+            return domainToast.show(text: "Pas d'adresse web pour « \(item.name) »", symbol: "exclamationmark.triangle.fill", tint: .systemOrange)
         }
+        // 1. La page s'ouvre tout de suite et charge pendant Touch ID et la lecture du mot de passe.
+        let space = service.vault.spaceID(for: item, config: config).flatMap(self.space) ?? currentSpace
+        let tab = newTab(url: url, in: space, activate: true)
+        pendingFills[tab.id] = PendingFill(item: item, username: nil, password: nil, expires: Date().addingTimeInterval(180))
+        Task { [weak self] in
+            // 2. Touch ID et `bw get item` (~2,5 s) en même temps ; le mot de passe n'est gardé que si Touch ID réussit.
+            async let credentials = service.credentials(for: id)
+            let allowed = await service.authenticate(reason: "remplir l'identifiant « \(item.name) »")
+            let result: (username: String?, password: String?)
+            do { result = try await credentials } catch {
+                self?.pendingFills[tab.id] = nil
+                if allowed { self?.showError("Bitwarden", error) }
+                return
+            }
+            guard let self, allowed, self.pendingFills[tab.id] != nil else { self?.pendingFills[tab.id] = nil; return }
+            let fill = PendingFill(item: item, username: result.username, password: result.password,
+                                   expires: Date().addingTimeInterval(180))
+            self.pendingFills[tab.id] = fill
+            // 3. Remplissage sans attendre la fin du chargement : le script guette l'apparition des champs.
+            self.runFill(fill, in: tab)
+        }
+    }
+
+    /// Cmd+Entrée : mot de passe dans le presse-papier (masqué dans l'historique, effacé après 90 s).
+    private func copyBitwardenPassword(_ item: BitwardenItem) {
+        let service = BitwardenService.shared
+        Task { [weak self] in
+            async let credentials = service.credentials(for: item.id)
+            let allowed = await service.authenticate(reason: "copier le mot de passe « \(item.name) »")
+            guard allowed, let password = try? await credentials.password, let self else { return }
+            let clip = ClipboardItem(kind: .secret, text: password, source: "Bitwarden", copiedAt: Date(), fromBitwarden: true)
+            ClipboardMonitor.shared.write(clip)
+            ClipboardMonitor.shared.record(clip)
+            ClipboardMonitor.shared.clearLater(after: .seconds(90))
+            self.domainToast.show(text: "Mot de passe copié (effacé dans 90 s)", symbol: "key.fill", tint: .systemBlue)
+        }
+    }
+
+    /// Relance un remplissage en attente (nouvelle page chargée ou adresse changée dans l'onglet).
+    private func resumeFill(in tab: BrowserTab) {
+        guard let fill = pendingFills[tab.id] else { return }
+        if fill.expires < Date() { pendingFills[tab.id] = nil; return }
+        runFill(fill, in: tab)
     }
 
     /// Remplit l'onglet si la page est bien sur le site enregistré (garde-fou anti-hameçonnage).
     private func runFill(_ fill: PendingFill, in tab: BrowserTab) {
-        guard let view = tab.liveWebView, BitwardenVault.pageMatches(tab.url, item: fill.item) else { return }
+        guard fill.username != nil || fill.password != nil,
+              let view = tab.liveWebView, BitwardenVault.pageMatches(tab.url, item: fill.item) else { return }
         let arguments: [String: Any] = ["username": fill.username ?? "", "password": fill.password ?? "",
-                                        "site": tab.url?.host()?.lowercased() ?? ""]
+                                        "site": tab.url?.host()?.lowercased() ?? "", "token": UUID().uuidString]
         Task { [weak self] in
             let result = try? await view.callAsyncJavaScript(LoginFiller.script, arguments: arguments, contentWorld: EscapeRelay.world)
-            guard let self, (result as? String) == "filled" else { return }
+            guard let self, (result as? String) == "filled", self.pendingFills[tab.id] != nil else { return }
             self.pendingFills[tab.id] = nil
             self.domainToast.show(text: "Rempli : \(fill.username ?? fill.item.name)", symbol: "checkmark.shield.fill", tint: .systemBlue,
                                   space: (tab.space.name, tab.space.color))

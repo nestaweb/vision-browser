@@ -250,6 +250,9 @@ enum LoginFiller {
     static let script = """
     const onSite = () => location.hostname === site || location.hostname.endsWith('.' + site);
     if (!onSite()) return 'wrong-site';
+    // Seul le dernier remplissage lancé dans la page agit (il peut être relancé à chaque étape du chargement).
+    window.__visionFillToken = token;
+    const current = () => window.__visionFillToken === token;
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     const fill = (el, value) => {
       el.focus();
@@ -262,7 +265,7 @@ enum LoginFiller {
                          'input[name*="mail" i], input[id*="user" i], input[id*="login" i], input[id*="mail" i], input[type="text"]';
     let userDone = !username, passDone = !password;
     const attempt = () => {
-      if (!onSite()) return true;
+      if (!onSite() || !current()) return true;
       const pass = [...document.querySelectorAll('input[type="password"]')].find(visible);
       if (!userDone) {
         const user = [...document.querySelectorAll(userSelector)].find(visible);
@@ -271,9 +274,11 @@ enum LoginFiller {
       if (!passDone && pass) { fill(pass, password); passDone = true; }
       return userDone && passDone;
     };
-    if (attempt()) return 'filled';
+    if (attempt()) return current() ? 'filled' : 'replaced';
     return await new Promise(resolve => {
-      const observer = new MutationObserver(() => { if (attempt()) { observer.disconnect(); resolve('filled'); } });
+      const observer = new MutationObserver(() => {
+        if (attempt()) { observer.disconnect(); resolve(current() && userDone && passDone ? 'filled' : 'replaced'); }
+      });
       observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
       setTimeout(() => { observer.disconnect(); resolve(userDone ? 'partial' : 'nothing'); }, 120000);
     });
