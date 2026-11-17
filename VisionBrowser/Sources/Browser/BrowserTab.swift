@@ -80,8 +80,13 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
             view.observe(\.isLoading) { [weak self] view, _ in
                 MainActor.assumeIsolated {
                     self?.propertiesDidChange([.loading])
+                    if let self { self.owner?.tabLoadingDidChange(self) }
                     if !view.isLoading, let self { self.owner?.tabDidFinishLoading(self) }
                 }
+            },
+            // Progression du chargement : le trait du haut s'élargit avec elle.
+            view.observe(\.estimatedProgress) { [weak self] _, _ in
+                MainActor.assumeIsolated { if let self { self.owner?.tabLoadingDidChange(self) } }
             },
         ]
         liveWebView = view

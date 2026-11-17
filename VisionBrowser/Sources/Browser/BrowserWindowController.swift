@@ -40,6 +40,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let commandBar = CommandBarView()
     private let domainToast = DomainToastView()
     private let insecureStripe = PassthroughView()
+    /// Indicateur de chargement de la page affichée (le trait, au bord haut).
+    private let loadingLine = LoadingLineView()
     private let trafficLightZone = TrafficLightZone()
     private let bottomZone = BottomEdgeZone()
     /// Vue d'ensemble « Scène » (D3) : la page recule, rangée des onglets dessous, rail des espaces à gauche.
@@ -162,7 +164,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         insecureStripe.isHidden = true
 
         // L'étiquette du haut passe au-dessus du voile de la barre Cmd+T (sinon elle paraît grisée).
-        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, overview, switcher, veil, domainToast, commandBar,
+        for view in [pageContainer, loadingLine, dragStrip, insecureStripe, bottomZone, overview, switcher, veil, domainToast, commandBar,
                      trafficLightZone, popupAnchor] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -183,6 +185,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             dragStrip.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 90),
             dragStrip.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             dragStrip.heightAnchor.constraint(equalToConstant: 10),
+
+            loadingLine.topAnchor.constraint(equalTo: content.topAnchor),
+            loadingLine.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            loadingLine.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            loadingLine.heightAnchor.constraint(equalToConstant: LoadingLineView.height),
 
             insecureStripe.topAnchor.constraint(equalTo: content.topAnchor),
             insecureStripe.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -479,6 +486,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if !commandBar.isOpen && overview.isHidden { window?.makeFirstResponder(view) }
         host.controller.didActivateTab(tab, previousActiveTab: previous)
         updateChrome(announce: announce)
+        // Autre page à l'écran : le trait repart de son état à elle.
+        loadingLine.update(loading: view.isLoading, progress: view.estimatedProgress, color: tab.space.color, reset: true)
     }
 
     /// Masque les pages autres que `kept`, après les avoir capturées (et après `delay`, durée de la transition).
@@ -542,6 +551,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func retireDisplayedPage() {
         displayedTab = nil
         hidePages(except: nil)
+        loadingLine.update(loading: false, progress: 0, color: .clear, reset: true)
     }
 
     func close(_ tab: BrowserTab) { close(tab, rememberForReopen: true) }
@@ -585,6 +595,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     /// Page chargée : sa carte est rafraîchie peu après (le temps que la page se dessine).
+    /// Chargement commencé, avancé ou fini : le trait du haut suit la page affichée.
+    func tabLoadingDidChange(_ tab: BrowserTab) {
+        guard tab === displayedTab, let view = tab.liveWebView else { return }
+        loadingLine.update(loading: view.isLoading, progress: view.estimatedProgress, color: tab.space.color)
+    }
+
     func tabDidFinishLoading(_ tab: BrowserTab) {
         resumeFill(in: tab)
         guard tab === displayedTab else { return }

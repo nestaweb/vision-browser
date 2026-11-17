@@ -150,3 +150,137 @@ final class DomainToastView: NSView {
         }
     }
 }
+
+/// Indicateur de chargement : « le trait », même motif que la fente de la barre Cmd+T.
+///
+/// Un trait de 2 pt, de la couleur de l'espace, collé au bord haut. Il naît au centre et s'élargit vers les deux
+/// bords à mesure que la page se charge. Chargement fini : il atteint les bords, puis se rétracte en un point au
+/// centre et disparaît. Il n'apparaît qu'après 150 ms : un chargement éclair ne fait rien clignoter.
+@MainActor
+final class LoadingLineView: NSView {
+    static let height: CGFloat = 2
+    /// Largeur minimale affichée : le trait se voit dès le début, avant que WebKit ne donne de progression.
+    static let minimumFraction = 0.08
+
+    private let line = CALayer()
+    private var showTask: Task<Void, Never>?
+    /// Avancée lente pendant que la page attend son serveur (WebKit ne bouge sa progression qu'au fil des octets).
+    private var creepTask: Task<Void, Never>?
+    private var isShowing = false
+    private var fraction = 0.0
+    /// Numéro de la dernière animation : une fin d'animation dépassée (nouveau chargement entre-temps) ne fait rien.
+    private var token = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        line.cornerRadius = Self.height / 2
+        line.opacity = 0
+        layer?.addSublayer(line)
+    }
+
+    required init?(coder: NSCoder) { fatalError("non utilisé") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Avancée lente : chaque pas réduit de 6 % l'écart restant jusqu'à 90 % ; jamais au-delà tant que ça charge.
+    static func creep(_ fraction: Double) -> Double {
+        fraction >= 0.9 ? fraction : fraction + (0.9 - fraction) * 0.06
+    }
+
+    /// Cadre du trait pour une fraction de la largeur, toujours centré.
+    static func lineFrame(fraction: Double, in bounds: CGRect) -> CGRect {
+        let width = bounds.width * CGFloat(min(max(fraction, 0), 1))
+        return CGRect(x: (bounds.width - width) / 2, y: 0, width: width, height: height)
+    }
+
+    /// État de chargement de la page affichée. `reset` : autre page affichée, on repart de zéro sans animation.
+    func update(loading: Bool, progress: Double, color: NSColor, reset: Bool = false) {
+        line.backgroundColor = color.cgColor
+        if reset {
+            showTask?.cancel()
+            showTask = nil
+            creepTask?.cancel()
+            creepTask = nil
+            fraction = 0
+            isShowing = false
+            token += 1
+            place(fraction: 0, opacity: 0, speed: nil)
+        }
+        if loading {
+            fraction = max(fraction, progress, Self.minimumFraction)
+            if isShowing {
+                place(fraction: fraction, opacity: 1, speed: .medium)
+            } else if showTask == nil {
+                showTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard let self, !Task.isCancelled else { return }
+                    self.showTask = nil
+                    self.isShowing = true
+                    self.token += 1
+                    // Le trait naît au centre : il part d'un point.
+                    self.place(fraction: 0, opacity: 1, speed: nil)
+                    self.place(fraction: self.fraction, opacity: 1, speed: .medium)
+                    self.startCreeping()
+                }
+            }
+        } else {
+            showTask?.cancel()
+            showTask = nil
+            creepTask?.cancel()
+            creepTask = nil
+            fraction = 0
+            guard isShowing else { return }
+            isShowing = false
+            token += 1
+            let done = token
+            // Il atteint les deux bords, puis se rétracte au centre et s'éteint.
+            place(fraction: 1, opacity: 1, speed: .fast) { [weak self] in
+                guard let self, self.token == done else { return }
+                if Design.Motion.allowsMovement() {
+                    self.place(fraction: 0, opacity: 1, speed: .medium) { [weak self] in
+                        guard let self, self.token == done else { return }
+                        self.place(fraction: 0, opacity: 0, speed: nil)
+                    }
+                } else {
+                    self.place(fraction: 1, opacity: 0, speed: .medium)
+                }
+            }
+        }
+    }
+
+    private func startCreeping() {
+        creepTask?.cancel()
+        creepTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard let self, !Task.isCancelled, self.isShowing else { return }
+                self.fraction = Self.creep(self.fraction)
+                self.place(fraction: self.fraction, opacity: 1, speed: .medium)
+            }
+        }
+    }
+
+    private func place(fraction: Double, opacity: Float, speed: Design.Motion.Speed?, then next: (@MainActor () -> Void)? = nil) {
+        CATransaction.begin()
+        if let speed {
+            CATransaction.setAnimationDuration(Design.Motion.duration(speed))
+            CATransaction.setAnimationTimingFunction(Design.Motion.curve)
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+        if let next { CATransaction.setCompletionBlock { MainActor.assumeIsolated { next() } } }
+        line.frame = Self.lineFrame(fraction: fraction, in: bounds)
+        line.opacity = opacity
+        CATransaction.commit()
+    }
+
+    override func layout() {
+        super.layout()
+        // Fenêtre redimensionnée : le trait reste centré, à sa fraction.
+        guard line.animationKeys() == nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        line.frame = Self.lineFrame(fraction: line.opacity > 0 ? fraction : 0, in: bounds)
+        CATransaction.commit()
+    }
+}
