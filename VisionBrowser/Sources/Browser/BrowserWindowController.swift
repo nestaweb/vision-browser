@@ -181,7 +181,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
             commandBar.topAnchor.constraint(equalTo: content.topAnchor, constant: 90),
             commandBar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            commandBar.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.5, constant: 160),
+            // La proportion est une simple préférence, sous la priorité de taille de la fenêtre (500).
+            // Plus forte, elle bornait la fenêtre à 1200 pt (0,5 × largeur + 160 ≤ 760) : AppKit en déduit
+            // `maxFullScreenContentSize`, d'où des bandes noires en plein écran.
+            commandBar.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.5, constant: 160)
+                .withPriority(NSLayoutConstraint.Priority(480)),
             commandBar.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
 
             trafficLightZone.topAnchor.constraint(equalTo: content.topAnchor),
@@ -1065,5 +1069,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func focus(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
         window?.makeKeyAndOrderFront(nil)
         completionHandler(nil)
+    }
+}
+
+private extension NSLayoutConstraint {
+    func withPriority(_ priority: NSLayoutConstraint.Priority) -> NSLayoutConstraint {
+        self.priority = priority
+        return self
     }
 }
