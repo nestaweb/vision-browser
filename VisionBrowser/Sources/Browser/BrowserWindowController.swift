@@ -42,7 +42,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let insecureStripe = PassthroughView()
     private let trafficLightZone = TrafficLightZone()
     private let bottomZone = BottomEdgeZone()
-    private let shelf = ShelfView()
     /// Vue d'ensemble « Scène » (D3) : la page recule, rangée des onglets dessous, rail des espaces à gauche.
     private let overview = SceneView()
     /// Page affichée à l'ouverture de la Scène : Échap y ramène, même après avoir changé d'espace.
@@ -57,7 +56,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private var saveTask: Task<Void, Never>?
     private var maintenanceTask: Task<Void, Never>?
-    private var shelfTask: Task<Void, Never>?
+    /// Attente sur le bord bas avant d'ouvrir la Scène (un passage vers le Dock ne l'ouvre pas).
+    private var bottomEdgeTask: Task<Void, Never>?
     private var monitors: [Any] = []
     /// Historique et favoris (phase 2) ; nil si la base ne s'ouvre pas : le navigateur reste utilisable.
     private let places = PlacesStore.openDefault()
@@ -161,7 +161,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         insecureStripe.isHidden = true
 
         // L'étiquette du haut passe au-dessus du voile de la barre Cmd+T (sinon elle paraît grisée).
-        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, shelf, overview, switcher, veil, domainToast, commandBar,
+        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, overview, switcher, veil, domainToast, commandBar,
                      trafficLightZone, popupAnchor] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -193,10 +193,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             bottomZone.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             bottomZone.heightAnchor.constraint(equalToConstant: 4),
 
-            shelf.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
-            shelf.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            shelf.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            shelf.heightAnchor.constraint(equalToConstant: ShelfView.height),
 
             overview.topAnchor.constraint(equalTo: content.topAnchor),
             overview.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -249,7 +245,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             self?.stepSpace(by: step)
         }
 
-        configureShelf()
+        configureBottomEdge()
         configureOverview()
     }
 
@@ -739,7 +735,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             guard order.count > 1 else { return true }
             switcherTabs = order
             switcherIndex = step > 0 ? 1 : order.count - 1
-            hideShelf()
             // Un appui bref bascule sans afficher le sélecteur (pas de clignotement).
             switcherShowTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(180))
@@ -786,7 +781,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if commandBar.isOpen { return hideCommandBar() }
         // Même effet que dans la Scène : effacer le filtre, sinon revenir à la page d'avant.
         if !overview.isHidden { return overview.handleEscape() }
-        if !shelf.isHidden { return hideShelf() }
         guard let view = displayedTab?.liveWebView else { return showOverview() }
         Task { [weak self] in
             guard await !EscapeRelay.shared.pageIsBusy(view), let self, view === self.displayedTab?.liveWebView else { return }
@@ -796,81 +790,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Étagère du bas
 
-    private func configureShelf() {
-        shelf.isHidden = true
-        shelf.alphaValue = 0
+    /// La souris posée contre le bord bas ouvre la Scène (D6 : remplace l'étagère, qui faisait doublon avec la rangée).
+    private func configureBottomEdge() {
         bottomZone.onEnter = { [weak self] in
-            self?.shelfTask?.cancel()
-            // Courte attente : un passage rapide de la souris (vers le Dock) ne fait pas monter l'étagère.
-            self?.shelfTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(120))
-                guard !Task.isCancelled else { return }
-                self?.showShelf()
-            }
-        }
-        bottomZone.onExit = { [weak self] in
-            if self?.shelf.isHidden ?? true { self?.shelfTask?.cancel() }
-        }
-        shelf.onMouseExit = { [weak self] in
-            self?.shelfTask?.cancel()
-            self?.shelfTask = Task { [weak self] in
+            self?.bottomEdgeTask?.cancel()
+            self?.bottomEdgeTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled, let self, let window = self.window else { return }
-                let point = self.shelf.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-                if !self.shelf.bounds.contains(point) { self.hideShelf() }
+                guard !Task.isCancelled, let self, self.overview.isHidden, !self.commandBar.isOpen,
+                      self.switcherTabs.isEmpty, self.window?.isKeyWindow == true else { return }
+                self.showOverview()
             }
         }
-        shelf.onSelectTab = { [weak self] id in
-            guard let self, let tab = self.tab(id) else { return }
-            self.hideShelf()
-            self.select(tab)
-        }
-        shelf.onHome = { [weak self] id in
-            guard let self, let tab = self.tab(id) else { return }
-            self.goHome(tab)
-            self.hideShelf()
-            self.select(tab)
-        }
-        shelf.onSelectSpace = { [weak self] id in
-            guard let self, let space = self.space(id) else { return }
-            self.switchTo(space)
-            self.refreshShelf()
-        }
-        shelf.onShowAll = { [weak self] in self?.showOverview() }
-    }
-
-    private func showShelf() {
-        guard shelf.isHidden, overview.isHidden, !commandBar.isOpen, switcherTabs.isEmpty, window?.isKeyWindow == true else { return }
-        Task { [weak self] in
-            await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
-            guard let self, self.overview.isHidden, !self.commandBar.isOpen else { return }
-            self.refreshShelf()
-            self.shelf.isHidden = false
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.15
-                MainActor.assumeIsolated { self.shelf.animator().alphaValue = 1 }
-            }, completionHandler: nil)
-        }
-    }
-
-    private func refreshShelf() {
-        let content = TabOrganizer.shelf(tabs.map(info))
-        let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
-        shelf.update(spaces: spaces.map { .init(id: $0.id, name: $0.name, color: $0.color, count: tabsBySpace[$0.id]?.count ?? 0,
-                                                isCurrent: $0 === currentSpace) },
-                     pinned: content.pinned.compactMap { byID[$0.id] }.map(card),
-                     recent: content.recent.compactMap { byID[$0.id] }.map(card))
-    }
-
-    private func hideShelf() {
-        shelfTask?.cancel()
-        guard !shelf.isHidden else { return }
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.15
-            MainActor.assumeIsolated { self.shelf.animator().alphaValue = 0 }
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated { if self?.shelf.alphaValue == 0 { self?.shelf.isHidden = true } }
-        })
+        bottomZone.onExit = { [weak self] in self?.bottomEdgeTask?.cancel() }
     }
 
     // MARK: Vue d'ensemble
@@ -918,7 +849,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func showOverview() {
         guard overview.isHidden, !overviewOpening else { return }
         overviewOpening = true
-        hideShelf()
         cancelSwitcher()
         if commandBar.isOpen { hideCommandBar() }
         sceneOrigin = (currentSpace, activeTab)
@@ -960,7 +890,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: Barre de commande (Cmd+T / Cmd+L)
 
     private func showCommandBar(newTab: Bool) {
-        hideShelf()
         if !overview.isHidden { overview.isHidden = true }
         // L'état de la CLI a pu changer (bw login fait dans le Terminal) : vérifié en arrière-plan.
         if !BitwardenService.shared.isUnlocked { Task { await BitwardenService.shared.refreshStatus() } }
@@ -1448,7 +1377,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
     func windowDidResignKey(_ notification: Notification) {
         cancelSwitcher()
-        hideShelf()
     }
 
     func windowWillClose(_ notification: Notification) {
