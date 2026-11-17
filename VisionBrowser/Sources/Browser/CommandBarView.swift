@@ -38,6 +38,8 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
     static let rowHeight: CGFloat = 40
     private static let listInset: CGFloat = 6
     private static let footerHeight: CGFloat = 34
+    /// Lignes visibles au plus ; au-delà, la liste défile (molette, trackpad, ↑ ↓, Page ↑ ↓).
+    static let maxVisibleRows = 8
 
     private let sheet = FlippedView()
     private let space = NSTextField(labelWithString: "")
@@ -45,7 +47,12 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
     private let bottomRule = NSView()
     private let highlight = NSView()
     private var rows: [ResultRow] = []
+    /// La liste défile dans sa propre vue ; le champ et le pied restent fixes.
+    private let listScroll = NSScrollView()
+    private let listDocument = FlippedView()
     private let footer = NSTextField(labelWithString: "")
+    /// « 3 sur 24 », à droite du pied, seulement quand la liste dépasse ce qui est visible.
+    private let counter = NSTextField(labelWithString: "")
     private var selected = 0
     private var height: NSLayoutConstraint!
     /// Numéro de la dernière animation lancée : une animation dépassée (barre rouverte entre-temps) ne fait rien.
@@ -92,8 +99,19 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
 
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = Design.Palette.ink(.tertiary)
+        counter.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        counter.textColor = Design.Palette.ink(.tertiary)
+        counter.alignment = .right
 
-        for view in [field, space, topRule, highlight, bottomRule, footer] as [NSView] { sheet.addSubview(view) }
+        listScroll.drawsBackground = false
+        listScroll.borderType = .noBorder
+        listScroll.hasVerticalScroller = true
+        listScroll.scrollerStyle = .overlay
+        listScroll.autohidesScrollers = true
+        listScroll.documentView = listDocument
+        listDocument.addSubview(highlight)
+
+        for view in [field, space, topRule, listScroll, bottomRule, footer, counter] as [NSView] { sheet.addSubview(view) }
         isHidden = true
         height = heightAnchor.constraint(equalToConstant: Self.fieldHeight)
         height.isActive = true
@@ -222,15 +240,33 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
                 self.select(index, animated: false)
                 self.onExecute?(result, self.query, .normal)
             }
-            sheet.addSubview(row)
+            listDocument.addSubview(row)
             return row
         }
         selected = min(max(previous, 0), max(results.count - 1, 0))
-        let listHeight = results.isEmpty ? 0 : 1 + Self.listInset * 2 + CGFloat(results.count) * Self.rowHeight + 1 + Self.footerHeight
         height.constant = Self.fieldHeight + listHeight
         superview?.layoutSubtreeIfNeeded()
         layoutSheet()
+        // Nouvelle recherche : la liste repart du haut ; suggestions arrivées après coup : on ne bouge pas.
+        if !keepSelection { scrollList(to: 0, animated: false) }
         select(selected, animated: false, force: true)
+    }
+
+    /// Lignes visibles : 8 au plus, moins si la fenêtre est basse (la barre est posée au quart de sa hauteur).
+    private var visibleRowLimit: Int {
+        guard let available = superview?.bounds.height else { return Self.maxVisibleRows }
+        let room = available * 0.75 - 40 - Self.fieldHeight - Self.footerHeight - Self.listInset * 2 - 2
+        return min(Self.maxVisibleRows, max(3, Int(room / Self.rowHeight)))
+    }
+
+    /// Hauteur de la liste avec ses traits et le pied. Quand tout ne tient pas, la dernière ligne visible est coupée
+    /// à mi-hauteur : on voit d'emblée que la liste continue, sans flèche ni ombre.
+    private var listHeight: CGFloat {
+        guard !results.isEmpty else { return 0 }
+        let limit = visibleRowLimit
+        let visible = results.count > limit ? (CGFloat(limit) - 0.5) * Self.rowHeight + Self.listInset
+                                            : CGFloat(results.count) * Self.rowHeight + Self.listInset * 2
+        return 1 + visible + 1 + Self.footerHeight
     }
 
     private func select(_ index: Int, animated: Bool, force: Bool = false) {
@@ -241,11 +277,44 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
         highlight.isHidden = false
         if animated { Design.Motion.animate(.fast) { self.highlight.animator().frame = frame } }
         else { highlight.frame = frame }
+        reveal(index, animated: animated)
+        updateCounter()
     }
 
+    /// Ligne dans la liste (repère de la liste défilante).
     private func rowFrame(_ index: Int) -> NSRect {
-        NSRect(x: Self.listInset, y: Self.fieldHeight + 1 + Self.listInset + CGFloat(index) * Self.rowHeight,
+        NSRect(x: Self.listInset, y: Self.listInset + CGFloat(index) * Self.rowHeight,
                width: sheet.bounds.width - Self.listInset * 2, height: Self.rowHeight)
+    }
+
+    /// Fait défiler juste assez pour que la ligne choisie soit entière à l'écran (au clavier, la liste suit la sélection).
+    private func reveal(_ index: Int, animated: Bool) {
+        let clip = listScroll.contentView
+        let frame = rowFrame(index).insetBy(dx: 0, dy: index == 0 || index == results.count - 1 ? -Self.listInset : 0)
+        var top = clip.bounds.minY
+        if frame.minY < top { top = frame.minY } else if frame.maxY > top + clip.bounds.height { top = frame.maxY - clip.bounds.height }
+        scrollList(to: top, animated: animated)
+    }
+
+    private func scrollList(to top: CGFloat, animated: Bool) {
+        let clip = listScroll.contentView
+        let target = NSPoint(x: 0, y: min(max(top, 0), max(listDocument.frame.height - clip.bounds.height, 0)))
+        guard target != clip.bounds.origin else { return }
+        if animated, Design.Motion.allowsMovement() {
+            Design.Motion.animate(.fast, { clip.animator().setBoundsOrigin(target) }) { [weak self] in
+                guard let self else { return }
+                self.listScroll.reflectScrolledClipView(self.listScroll.contentView)
+            }
+        } else {
+            clip.setBoundsOrigin(target)
+            listScroll.reflectScrolledClipView(clip)
+        }
+    }
+
+    private func updateCounter() {
+        let overflowing = results.count > visibleRowLimit
+        counter.isHidden = !overflowing
+        counter.stringValue = overflowing ? "\(selected + 1) sur \(results.count)" : ""
     }
 
     override func layout() {
@@ -265,12 +334,17 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
         bottomRule.isHidden = !hasList
         footer.isHidden = !hasList
         highlight.isHidden = !hasList
+        listScroll.isHidden = !hasList
         topRule.frame = NSRect(x: 0, y: Self.fieldHeight, width: width, height: 1)
+        let footerTop = bounds.height - Self.footerHeight
+        listScroll.frame = NSRect(x: 0, y: Self.fieldHeight + 1, width: width, height: max(footerTop - 1 - Self.fieldHeight - 1, 0))
+        listDocument.frame = NSRect(x: 0, y: 0, width: width, height: CGFloat(results.count) * Self.rowHeight + Self.listInset * 2)
         for (index, row) in rows.enumerated() { row.frame = rowFrame(index) }
         if hasList { highlight.frame = rowFrame(selected) }
-        let footerTop = bounds.height - Self.footerHeight
         bottomRule.frame = NSRect(x: 0, y: footerTop - 1, width: width, height: 1)
-        footer.frame = NSRect(x: 18, y: footerTop + 10, width: width - 36, height: 16)
+        footer.frame = NSRect(x: 18, y: footerTop + 10, width: width - 36 - 90, height: 16)
+        counter.frame = NSRect(x: width - 18 - 90, y: footerTop + 10, width: 90, height: 16)
+        if !hasList { counter.isHidden = true }
     }
 
     /// Survol : une seule zone pour la barre ; la ligne sous le pointeur est choisie (voir `SceneView.mouseMoved`).
@@ -281,8 +355,8 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard isOpen else { return }
-        let point = sheet.convert(event.locationInWindow, from: nil)
+        guard isOpen, listScroll.bounds.contains(listScroll.convert(event.locationInWindow, from: nil)) else { return }
+        let point = listDocument.convert(event.locationInWindow, from: nil)
         if let index = rows.firstIndex(where: { $0.frame.contains(point) }) { select(index, animated: true) }
     }
 
@@ -316,6 +390,10 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
             select(min(selected + 1, results.count - 1), animated: true); return true
         case #selector(NSResponder.moveUp(_:)):
             select(max(selected - 1, 0), animated: true); return true
+        case #selector(NSResponder.pageDown(_:)), #selector(NSResponder.scrollPageDown(_:)):
+            select(min(selected + visibleRowLimit - 1, results.count - 1), animated: true); return true
+        case #selector(NSResponder.pageUp(_:)), #selector(NSResponder.scrollPageUp(_:)):
+            select(max(selected - visibleRowLimit + 1, 0), animated: true); return true
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
             // ⌥↩ arrive ici comme « insertNewlineIgnoringFieldEditor » : on lit la touche Option de l'événement.
             let option = NSApp.currentEvent?.modifierFlags.contains(.option) ?? false

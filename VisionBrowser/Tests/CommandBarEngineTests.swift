@@ -70,6 +70,23 @@ final class CommandBarEngineTests: XCTestCase {
         XCTAssertEqual(results.map(\.title), ["B", "A", "Kagi"])
     }
 
+    /// Plus de 9 résultats pour faire défiler ; le premier écran reste : 6 onglets récents, les favoris, puis le reste.
+    func testEmptyQueryListsEveryTabForScrolling() throws {
+        let e = try engine { $0.toggleFavorite(url: URL(string: "https://kagi.com")!, title: "Kagi") }
+        let tabs = (1...15).map { tab("https://site\($0).com", "T\($0)", ago: TimeInterval($0)) }
+        let titles = e.results(for: "", tabs: tabs, context: context).map(\.title)
+        XCTAssertEqual(titles.count, 16)
+        XCTAssertEqual(Array(titles.prefix(7)), ["T1", "T2", "T3", "T4", "T5", "T6", "Kagi"])
+        XCTAssertEqual(titles.last, "T15")
+    }
+
+    func testSearchReturnsMoreThanOneScreen() throws {
+        let e = try engine { places in
+            for n in 1...25 { places.recordVisit(url: URL(string: "https://docs.exemple.fr/page\(n)")!, title: "Doc \(n)") }
+        }
+        XCTAssertGreaterThan(e.results(for: "doc", tabs: [], context: context).count, 12)
+    }
+
     func testFromAnEmptySpaceOpenTabsAreReopenedHere() throws {
         var empty = context
         empty.currentSpaceIsEmpty = true

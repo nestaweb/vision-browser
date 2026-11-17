@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<!-- Page interne : aucune ressource extérieure, aucun appel réseau. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>Accueil</title>
+<!--
+  Page d'accueil de Vision Browser, direction « La salle » (maquette : maquette/accueil.html).
+  Affichée dans un espace sans onglet ouvert. Les tâches vivent dans l'app (TaskStore, SQLite local) ;
+  la page lui parle par le canal `vision` (voir HomePage.swift), qui répond avec l'état complet.
+-->
+<style>
+:root {
+  --ink: #1c1c1a; --paper: #f2f0eb; --sheet: #fbfaf7; --house: #252523;
+  --brique: #c4664d; --space: #b5844a;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --out: cubic-bezier(.2,.8,.2,1); --fast: 140ms; --mid: 220ms; --slow: 340ms;
+  --bg: var(--house); --fg: var(--paper);
+  --fg-2: rgba(242,240,235,.58); --fg-3: rgba(242,240,235,.32); --fg-4: rgba(242,240,235,.09); --fg-5: rgba(242,240,235,.045);
+  --card: var(--sheet); --card-fg: var(--ink); --card-2: rgba(28,28,26,.55); --card-3: rgba(28,28,26,.30); --card-4: rgba(28,28,26,.08);
+  --shadow: 0 18px 44px rgba(0,0,0,.38), 0 0 0 .5px rgba(0,0,0,.4);
+}
+body.papier {
+  --bg: #efede8; --fg: var(--ink); --brique: #a8513b;
+  --fg-2: rgba(28,28,26,.58); --fg-3: rgba(28,28,26,.32); --fg-4: rgba(28,28,26,.09); --fg-5: rgba(28,28,26,.04);
+  --shadow: 0 14px 34px rgba(0,0,0,.10), 0 0 0 .5px rgba(0,0,0,.12);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { min-height: 100%; }
+body { font-family: var(--font); -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--fg);
+  font-variant-numeric: tabular-nums; -webkit-user-select: none; cursor: default; }
+body.ready { transition: background var(--slow) var(--out), color var(--slow) var(--out); }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: default; }
+input, textarea { font: inherit; color: inherit; -webkit-user-select: text; }
+
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+
+/* Rail */
+aside { padding: 56px 18px 32px 26px; position: sticky; top: 0; height: 100vh; overflow: auto; display: flex; flex-direction: column; }
+.rail-label { font-size: 10.5px; font-weight: 600; letter-spacing: 1.1px; text-transform: uppercase; color: var(--fg-3); margin: 0 0 10px 12px; }
+.rail-item { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 12px; border-radius: 8px; font-size: 14px; color: var(--fg-2); width: 100%; text-align: left; transition: background var(--fast), color var(--fast); }
+.rail-item:hover { background: var(--fg-5); color: var(--fg); }
+.rail-item.on { color: var(--fg); font-weight: 600; }
+.rail-item .bar { width: 3px; height: 16px; border-radius: 2px; margin-left: -12px; margin-right: 6px; transition: background var(--mid); }
+.rail-item.on .bar { background: var(--c, var(--fg)); }
+.rail-item .n { margin-left: auto; font-size: 12px; color: var(--fg-3); font-weight: 400; }
+.rail-item.sub { height: 28px; font-size: 13px; padding-left: 34px; }
+.rail-item .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-group { margin-bottom: 28px; }
+.rail-foot { margin-top: auto; padding-left: 12px; }
+.pig { width: 8px; height: 8px; border-radius: 2px; flex: none; background: var(--fg-3); }
+
+main { padding: 56px 56px 140px 32px; max-width: 1180px; }
+header.top { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 24px; margin-bottom: 30px; }
+.kicker { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 600; letter-spacing: 1.3px; text-transform: uppercase; color: var(--fg-2); margin-bottom: 10px; }
+.kicker i { width: 22px; height: 3px; border-radius: 2px; background: var(--space); }
+h1 { font-size: 44px; font-weight: 600; letter-spacing: -1.4px; line-height: 1; }
+h1::first-letter { text-transform: uppercase; }
+.stats { display: flex; gap: 34px; }
+.stat b { display: block; font-size: 30px; font-weight: 600; letter-spacing: -.8px; line-height: 1; }
+.stat span { font-size: 12px; color: var(--fg-2); }
+.stat.late b { color: var(--brique); }
+.stat.zero b { color: var(--fg-3); }
+
+/* Le champ d'ajout : la barre Cmd+T. */
+.bar-add { background: var(--sheet); color: var(--ink); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 52px; }
+.bar-add .field { display: flex; align-items: center; gap: 14px; height: 58px; padding: 0 20px; }
+.plus { width: 14px; height: 14px; position: relative; flex: none; }
+.plus::before, .plus::after { content: ""; position: absolute; background: var(--ink); border-radius: 1px; }
+.plus::before { left: 6px; top: 0; width: 2px; height: 14px; }
+.plus::after { top: 6px; left: 0; height: 2px; width: 14px; }
+.bar-add input { flex: 1; border: 0; outline: 0; background: none; font-size: 19px; }
+.bar-add input::placeholder { color: rgba(28,28,26,.32); }
+.bar-add .hint { font-size: 12px; color: rgba(28,28,26,.4); white-space: nowrap; }
+.bar-add .hint kbd { font: inherit; font-weight: 600; color: rgba(28,28,26,.6); }
+.chips { display: flex; gap: 8px; padding: 0 20px 14px 48px; margin-top: -4px; }
+.chips:empty { display: none; }
+.chip { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 6px; background: var(--ink); color: var(--paper); font-size: 12px; animation: rise var(--mid) var(--out) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(4px); } }
+
+h2 { display: flex; align-items: baseline; gap: 12px; font-size: 11px; font-weight: 600; letter-spacing: 1.3px; text-transform: uppercase; color: var(--fg-2); margin-bottom: 16px; }
+h2 .n { color: var(--fg-3); }
+.empty { font-size: 15px; color: var(--fg-2); line-height: 1.6; max-width: 560px; }
+.empty code { font: inherit; color: var(--fg); }
+
+/* À l'affiche */
+.billing { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; margin-bottom: 56px; }
+.fiche { background: var(--card); color: var(--card-fg); border-radius: 12px; box-shadow: var(--shadow); padding: 18px 20px 16px; display: flex; flex-direction: column; min-height: 214px; transition: transform var(--mid) var(--out); }
+.fiche:hover { transform: translateY(-3px); }
+.tag { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--card-2); min-height: 16px; }
+.tag .sub::before { content: "›"; margin-right: 6px; color: var(--card-3); }
+.fiche h3 { font-size: 19px; font-weight: 600; letter-spacing: -.3px; line-height: 1.25; margin: 10px 0 14px; }
+.fiche .foot { margin-top: auto; display: flex; align-items: end; gap: 16px; }
+.countdown b { display: block; font-size: 26px; font-weight: 600; letter-spacing: -.6px; line-height: 1; }
+.countdown span { font-size: 11.5px; color: var(--card-2); }
+.countdown.late b, .countdown.late span { color: #a8513b; }
+.countdown.none b { color: var(--card-3); }
+.progress { display: flex; gap: 3px; margin-top: 8px; }
+.progress i { width: 18px; height: 3px; border-radius: 2px; background: var(--card-4); }
+.progress i.ok { background: var(--ink); }
+.stack { margin-left: auto; display: flex; }
+.stack .mini + .mini { margin-left: -26px; }
+
+/* Vignette d'une page liée : la barre du site (couleur tirée de son nom), un titre, des blocs ; l'initiale du site. */
+.mini { position: relative; width: 74px; height: 48px; border-radius: 5px; overflow: hidden; background: #fff; box-shadow: 0 0 0 .5px rgba(0,0,0,.18), 0 4px 10px rgba(0,0,0,.12); flex: none; }
+.mini::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 9px; background: var(--b); }
+.mini::after { content: ""; position: absolute; left: 8px; top: 16px; width: 60%; height: 5px; border-radius: 2px; background: rgba(0,0,0,.55);
+  box-shadow: 0 9px 0 -1px rgba(0,0,0,.12), 22px 18px 0 -1px rgba(0,0,0,.12); }
+.mini.big { width: 168px; height: 106px; border-radius: 7px; }
+.mini.big::before { height: 16px; }
+.mini.big::after { left: 14px; top: 30px; height: 8px; box-shadow: 0 16px 0 -2px rgba(0,0,0,.12), 40px 32px 0 -2px rgba(0,0,0,.12); }
+.mini .ini { position: absolute; right: 10px; bottom: 8px; font-size: 22px; font-weight: 700; color: var(--b); opacity: .9; }
+
+/* Le programme */
+.controls { display: flex; flex-wrap: wrap; gap: 8px 26px; align-items: center; margin-bottom: 18px; font-size: 12px; color: var(--fg-3); }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--fg-5); margin-left: 8px; }
+.seg button { height: 26px; padding: 0 11px; border-radius: 7px; font-size: 12.5px; color: var(--fg-2); transition: background var(--fast), color var(--fast); }
+.seg button:hover { color: var(--fg); }
+.seg button.on { background: var(--fg); color: var(--bg); font-weight: 600; }
+.thead, .tr { display: grid; grid-template-columns: 28px minmax(0, 1fr) 220px 120px 80px 104px; align-items: center; column-gap: 14px; }
+.thead { height: 30px; font-size: 10.5px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--fg-3); border-bottom: 1px solid var(--fg-4); }
+.ghead { display: flex; align-items: center; gap: 12px; padding: 26px 0 10px; }
+.ghead .name { font-size: 20px; font-weight: 600; letter-spacing: -.4px; }
+.ghead .n { font-size: 13px; color: var(--fg-3); }
+.ghead .pig { width: 10px; height: 10px; border-radius: 3px; }
+.row { border-bottom: 1px solid var(--fg-4); }
+.tr { min-height: 50px; font-size: 14.5px; border-radius: 8px; position: relative; transition: background var(--fast); }
+.tr:hover { background: var(--fg-5); }
+.tr.sel { background: var(--fg-5); }
+.tr.sel::before { content: ""; position: absolute; left: -14px; top: 15px; bottom: 15px; width: 3px; border-radius: 2px; background: var(--fg); }
+.tr .title { position: relative; justify-self: start; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color var(--mid); }
+.tr .title::after { content: ""; position: absolute; left: 0; right: 0; top: 52%; height: 1.5px; background: var(--fg-3); transform: scaleX(0); transform-origin: left; transition: transform var(--slow) var(--out); }
+.row.done .tr .title { color: var(--fg-3); }
+.row.done .tr .title::after { transform: scaleX(1); }
+.tr .proj { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-2); white-space: nowrap; overflow: hidden; }
+.tr .proj .sub::before { content: "› "; color: var(--fg-3); }
+.tr .due { font-size: 13px; color: var(--fg-2); }
+.tr .due.late { color: var(--brique); font-weight: 600; }
+.tr .pages { display: flex; }
+.tr .pages .fav + .fav { margin-left: -5px; }
+.fav { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-size: 9.5px; font-weight: 700; color: #fff; box-shadow: 0 0 0 1.5px var(--bg), inset 0 0 0 1px rgba(255,255,255,.22); }
+
+/* Statut : la forme de la case dit l'avancement. */
+.box { width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--fg-2); position: relative; transition: border-color var(--mid), background var(--mid); }
+.box:hover { border-color: var(--fg); }
+.box::after { content: ""; position: absolute; left: 2.5px; top: 2.5px; bottom: 2.5px; width: 0; border-radius: 3px; background: var(--space); transition: width var(--mid) var(--out); }
+.box[data-s="doing"] { border-color: var(--space); }
+.box[data-s="doing"]::after { width: 5.5px; }
+.box[data-s="waiting"] { border-style: dashed; border-color: var(--fg-3); }
+.box[data-s="done"] { border-color: var(--fg-3); background: var(--fg-3); }
+.box[data-s="done"]::before { content: ""; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.state { font-size: 12.5px; color: var(--fg-2); }
+.state[data-s="doing"] { color: var(--fg); font-weight: 600; }
+
+/* Fiche dépliée : une feuille claire, ouverte par la fente. */
+.open-sheet { background: var(--card); color: var(--card-fg); border-radius: 12px; margin: 4px 0 16px 42px; padding: 22px 24px; box-shadow: var(--shadow);
+  display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 34px; }
+.open-sheet.opening { animation: fente var(--slow) var(--out) both; }
+@keyframes fente {
+  0%   { clip-path: inset(calc(50% - 1px) 50% calc(50% - 1px) 50% round 2px); }
+  35%  { clip-path: inset(calc(50% - 1px) 0 calc(50% - 1px) 0 round 2px); }
+  100% { clip-path: inset(0 0 0 0 round 12px); }
+}
+.open-sheet h4 { font-size: 10.5px; font-weight: 600; letter-spacing: 1.1px; text-transform: uppercase; color: var(--card-3); margin-bottom: 10px; }
+.open-sheet .block + .block { margin-top: 22px; }
+.open-sheet input.plain, .open-sheet textarea { width: 100%; border: 0; outline: 0; background: none; }
+.open-sheet .t-title { font-size: 19px; font-weight: 600; letter-spacing: -.3px; margin-bottom: 4px; }
+.open-sheet textarea { min-height: 54px; resize: none; font-size: 15px; line-height: 1.55; }
+.open-sheet ::placeholder { color: var(--card-3); }
+.pagelist { display: flex; gap: 14px; flex-wrap: wrap; }
+.page { display: flex; flex-direction: column; gap: 7px; position: relative; }
+.page .mini { transition: transform var(--mid) var(--out); }
+.page:hover .mini { transform: translateY(-2px); }
+.page .t { font-size: 12.5px; font-weight: 500; max-width: 168px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.page .h { font-size: 11.5px; color: var(--card-3); margin-top: -5px; }
+.page .x { position: absolute; right: -6px; top: -6px; width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--paper); font-size: 12px; line-height: 20px; text-align: center; opacity: 0; transition: opacity var(--fast); }
+.page:hover .x { opacity: 1; }
+.page.add .mini { background: transparent; box-shadow: none; border: 1.5px dashed var(--card-3); display: grid; place-items: center; font-size: 12px; color: var(--card-2); }
+.page.add .mini::before, .page.add .mini::after { display: none; }
+.picker { margin-top: 12px; border-radius: 9px; background: var(--card-4); padding: 6px; max-width: 520px; animation: rise var(--mid) var(--out) both; }
+.picker button { display: flex; width: 100%; gap: 10px; align-items: center; height: 30px; padding: 0 8px; border-radius: 6px; font-size: 13px; text-align: left; }
+.picker button:hover { background: var(--card-4); }
+.picker button span:last-child { margin-left: auto; color: var(--card-3); font-size: 12px; }
+.picker input { width: 100%; height: 30px; border: 0; outline: 0; background: none; padding: 0 8px; font-size: 13px; }
+.due-row { display: flex; align-items: baseline; gap: 10px; }
+.due-big { font-size: 30px; font-weight: 600; letter-spacing: -.8px; line-height: 1; }
+.due-rel { font-size: 12.5px; color: var(--card-2); margin-top: 4px; }
+.late-c { color: #a8513b !important; }
+.date-in { font-size: 12.5px; color: var(--card-2); border: 0; outline: 0; background: var(--card-4); border-radius: 6px; height: 26px; padding: 0 8px; margin-top: 8px; }
+.linkish { font-size: 12.5px; color: var(--card-2); text-decoration: underline; text-decoration-color: var(--card-3); text-underline-offset: 2px; }
+.statuses { display: flex; gap: 6px; flex-wrap: wrap; }
+.statuses button { height: 28px; padding: 0 11px; border-radius: 7px; font-size: 12.5px; background: var(--card-4); color: var(--card-2); }
+.statuses button.on { background: var(--ink); color: var(--paper); font-weight: 600; }
+.subs { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.subtask { display: flex; align-items: center; gap: 10px; }
+.subtask .sbox { width: 15px; height: 15px; border-radius: 5px; border: 1.5px solid var(--card-3); position: relative; transition: all var(--mid); flex: none; }
+.subtask.ok .sbox { background: var(--ink); border-color: var(--ink); }
+.subtask.ok .sbox::before { content: ""; position: absolute; left: 4px; top: 1px; width: 3.5px; height: 7px; border: solid var(--sheet); border-width: 0 1.8px 1.8px 0; transform: rotate(45deg); }
+.subtask.ok .st { color: var(--card-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+.subtask .del { margin-left: auto; color: var(--card-3); opacity: 0; font-size: 13px; }
+.subtask:hover .del { opacity: 1; }
+.sub-add { font-size: 13.5px; border: 0; outline: 0; background: none; width: 100%; padding-left: 25px; height: 24px; }
+.where { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.where input { height: 28px; border-radius: 6px; background: var(--card-4); padding: 0 8px; font-size: 13px; border: 0; outline: 0; width: 100%; }
+.danger { margin-top: 22px; font-size: 12px; color: var(--card-3); }
+.danger.armed { color: #a8513b; font-weight: 600; }
+
+.row.fresh { animation: fresh var(--slow) var(--out) both; }
+@keyframes fresh { from { opacity: 0; transform: translateY(-12px); } }
+
+@media (max-width: 1100px) {
+  .thead, .tr { grid-template-columns: 28px minmax(0, 1fr) 170px 100px 96px; }
+  .thead > :nth-child(5), .tr > :nth-child(5) { display: none; }
+  .app { grid-template-columns: 200px minmax(0, 1fr); }
+}
+@media (max-width: 820px) { aside { display: none; } .app { grid-template-columns: 1fr; } main { padding: 40px 24px 120px; } .stats { display: none; } }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: 1ms !important; transition-duration: 1ms !important; } }
+</style>
+</head>
+<body>
+<div class="app"><aside id="rail"></aside><main id="main"></main></div>
+<script>
+"use strict";
+// ───────── Canal avec l'app ─────────
+const call = async (name, args = {}) => {
+  const reply = await window.webkit.messageHandlers.vision.postMessage({ name, args });
+  return reply ? JSON.parse(reply) : null;
+};
+
+let S = null;                          // état reçu de l'app
+let viewSpace = null, projectFilter = null;
+let groupBy = "project", sortBy = "status", scope = "here", mode = "salle";
+const open = new Set();
+let openingID = null, freshID = null, selected = -1, picker = null, armedDelete = null;
+const STATUS = { doing: "En cours", todo: "À faire", waiting: "En attente", done: "Fait" };
+const ORDER = ["doing", "todo", "waiting", "done"];
+const PIGMENTS = ["#3f8a8c", "#b5844a", "#b5577a", "#7a5ea8", "#4a6fa5", "#5f8a4e", "#a99052", "#a8513b"];
+
+// ───────── Outils ─────────
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const asDate = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const today = () => asDate(S.today);
+const diff = s => Math.round((asDate(s) - today()) / 86400000);
+const fmt = (s, o) => asDate(s).toLocaleDateString("fr-FR", o);
+const rel = s => { if (!s) return "sans échéance"; const n = diff(s); return n === 0 ? "aujourd'hui" : n === 1 ? "demain" : n === -1 ? "hier" : n < 0 ? `${-n} j de retard` : `dans ${n} j`; };
+const late = t => t.status !== "done" && t.due && diff(t.due) < 0;
+const spaceOf = id => S.spaces.find(s => s.id === id);
+const colorOf = t => spaceOf(t.spaceID)?.color ?? "var(--fg-3)";
+const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; } };
+const hue = host => PIGMENTS[[...host].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) % PIGMENTS.length];
+const mini = (link, big) => { const h = hostOf(link.url); return `<span class="mini ${big ? "big" : ""}" style="--b:${hue(h)}"><span class="ini">${esc(h[0]?.toUpperCase())}</span></span>`; };
+const fav = link => { const h = hostOf(link.url); return `<span class="fav" style="background:${hue(h)}" title="${esc(link.title || h)}">${esc(h[0]?.toUpperCase())}</span>`; };
+const task = id => S.tasks.find(t => t.id === id);
+
+function inScope(t) {
+  const here = scope === "all" || !t.spaceID || t.spaceID === viewSpace;
+  const proj = !projectFilter || (t.project === projectFilter[0] && (!projectFilter[1] || t.sub === projectFilter[1]));
+  return here && proj;
+}
+function sorted(list) {
+  const dueKey = t => t.due ? diff(t.due) : 1e6;
+  const cmp = { status: (a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || dueKey(a) - dueKey(b),
+                due: (a, b) => dueKey(a) - dueKey(b), title: (a, b) => a.title.localeCompare(b.title, "fr") }[sortBy];
+  return [...list].sort((a, b) => (scope === "all" ? (b.spaceID === viewSpace) - (a.spaceID === viewSpace) : 0) || cmp(a, b) || a.id - b.id);
+}
+function grouped(list) {
+  if (groupBy === "none") return [{ key: "Toutes les tâches", items: list }];
+  const keyOf = { project: t => t.project || "Sans projet", sub: t => t.project ? (t.sub ? `${t.project} › ${t.sub}` : t.project) : "Sans projet",
+    status: t => STATUS[t.status], space: t => spaceOf(t.spaceID)?.name ?? "Sans espace",
+    due: t => { if (!t.due) return "Sans échéance"; const n = diff(t.due); return n < 0 ? "En retard" : n === 0 ? "Aujourd'hui" : n <= 7 ? "Cette semaine" : "Plus tard"; } }[groupBy];
+  const m = new Map(); list.forEach(t => { const k = keyOf(t); m.has(k) || m.set(k, []); m.get(k).push(t); });
+  const out = [...m].map(([key, items]) => ({ key, items, color: colorOf(items[0]) }));
+  const rank = { status: ORDER.map(s => STATUS[s]), due: ["En retard", "Aujourd'hui", "Cette semaine", "Plus tard", "Sans échéance"] }[groupBy];
+  if (rank) return out.sort((a, b) => rank.indexOf(a.key) - rank.indexOf(b.key));
+  return out.sort((a, b) => (a.key === "Sans projet") - (b.key === "Sans projet"));
+}
+
+// ───────── Rail ─────────
+function renderRail() {
+  const spaces = S.spaces.map(s => {
+    const n = S.tasks.filter(t => t.spaceID === s.id && t.status !== "done").length;
+    return `<button class="rail-item ${s.id === viewSpace ? "on" : ""}" style="--c:${s.color}" data-view="${s.id}"><span class="bar"></span><span class="label">${esc(s.name)}</span><span class="n">${n || ""}</span></button>`;
+  }).join("");
+  const projects = new Map();
+  S.tasks.filter(t => (scope === "all" || !t.spaceID || t.spaceID === viewSpace) && t.project).forEach(t => {
+    projects.has(t.project) || projects.set(t.project, { color: colorOf(t), subs: new Set(), n: 0 });
+    const p = projects.get(t.project); if (t.sub) p.subs.add(t.sub); if (t.status !== "done") p.n++;
+  });
+  const pf = projectFilter || [];
+  const items = [...projects].sort(([a], [b]) => a.localeCompare(b, "fr")).map(([name, p]) => `
+    <button class="rail-item ${pf[0] === name && !pf[1] ? "on" : ""}" style="--c:${p.color}" data-proj="${esc(name)}"><span class="bar"></span><span class="pig" style="background:${p.color}"></span><span class="label">${esc(name)}</span><span class="n">${p.n || ""}</span></button>
+    ${[...p.subs].sort().map(s => `<button class="rail-item sub ${pf[0] === name && pf[1] === s ? "on" : ""}" style="--c:${p.color}" data-proj="${esc(name)}" data-sub="${esc(s)}"><span class="bar"></span><span class="label">${esc(s)}</span></button>`).join("")}`).join("");
+  document.getElementById("rail").innerHTML = `
+    <div class="rail-group"><div class="rail-label">Espaces</div>${spaces}</div>
+    <div class="rail-group"><div class="rail-label">Projets</div>
+      <button class="rail-item ${projectFilter ? "" : "on"}" data-proj=""><span class="bar"></span><span class="label">Tous les projets</span></button>${items}</div>
+    <div class="rail-foot"><span class="seg" style="margin-left:0">${[["salle", "Salle"], ["papier", "Papier"]].map(([v, l]) => `<button data-mode="${v}" class="${mode === v ? "on" : ""}">${l}</button>`).join("")}</span></div>`;
+}
+
+// ───────── Page ─────────
+function render() {
+  if (!S) return;
+  renderRail();
+  const space = spaceOf(viewSpace) ?? S.spaces[0];
+  document.documentElement.style.setProperty("--space", space?.color ?? "#b5844a");
+  const mine = S.tasks.filter(t => t.spaceID === viewSpace || !t.spaceID);
+  const count = s => mine.filter(t => t.status === s).length;
+  const lateN = mine.filter(late).length;
+  const list = sorted(S.tasks.filter(inScope));
+  const onBill = list.filter(t => t.status === "doing" || late(t));
+  const seg = (attr, cur, items) => `<span class="seg">${items.map(([v, l]) => `<button data-${attr}="${v}" class="${v === cur ? "on" : ""}">${esc(l)}</button>`).join("")}</span>`;
+  const stat = (n, label, cls = "") => `<div class="stat ${cls} ${n ? "" : "zero"}"><b>${n}</b><span>${label}</span></div>`;
+
+  let h = `
+  <header class="top">
+    <div><div class="kicker"><i></i>${esc(space?.name ?? "")}</div><h1>${esc(fmt(S.today, { weekday: "long", day: "numeric", month: "long" }))}</h1></div>
+    <div class="stats">${stat(count("doing"), "en cours")}${stat(count("todo"), "à faire")}${stat(count("waiting"), "en attente")}${lateN ? stat(lateN, "en retard", "late") : ""}</div>
+  </header>
+  <div class="bar-add"><div class="field"><span class="plus"></span><input id="add" data-keep="add" placeholder="Nouvelle tâche" autocomplete="off" spellcheck="false">
+    <span class="hint"><kbd>#</kbd> projet/sous-projet · <kbd>!</kbd> échéance · <kbd>↩</kbd></span></div><div class="chips" id="chips"></div></div>`;
+
+  if (!S.tasks.length) {
+    h += `<p class="empty">Rien à l'affiche pour l'instant. Tape une tâche ci-dessus, par exemple <code>Relancer le devis #Clients/Studio Mer !ven</code> : le projet, le sous-projet et l'échéance sont reconnus au fil de la frappe.<br><br>Pour une page web, <code>⌘T</code>.</p>`;
+    return paint(h);
+  }
+  if (onBill.length) {
+    h += `<h2>À l'affiche <span class="n">${onBill.length}</span></h2><div class="billing">${onBill.map(t => {
+      const n = t.due ? diff(t.due) : null;
+      const big = n === null ? "–" : n < 0 ? `+${-n} j` : n === 0 ? "Auj." : `J-${n}`;
+      const small = n === null ? "sans échéance" : n < 0 ? "de retard" : fmt(t.due, { weekday: "short", day: "numeric", month: "short" });
+      return `<div class="fiche" data-open="${t.id}">
+        <span class="tag">${t.project ? `<span class="pig" style="background:${colorOf(t)}"></span>${esc(t.project)}${t.sub ? `<span class="sub">${esc(t.sub)}</span>` : ""}` : ""}</span>
+        <h3>${esc(t.title)}</h3>
+        <div class="foot">
+          <div class="countdown ${late(t) ? "late" : ""} ${n === null ? "none" : ""}"><b>${big}</b><span>${esc(small)}</span>
+            ${t.subtasks.length ? `<div class="progress">${t.subtasks.map(s => `<i class="${s.done ? "ok" : ""}"></i>`).join("")}</div>` : ""}</div>
+          <div class="stack">${t.links.slice(0, 3).map(l => mini(l)).join("")}</div>
+        </div></div>`; }).join("")}</div>`;
+  }
+  h += `<h2>Le programme <span class="n">${list.length}</span></h2>
+  <div class="controls">
+    <span>Grouper${seg("group", groupBy, [["project","Projet"],["sub","Sous-projet"],["status","Statut"],["due","Échéance"],["space","Espace"],["none","Aucun"]])}</span>
+    <span>Trier${seg("sort", sortBy, [["status","Statut"],["due","Échéance"],["title","Titre"]])}</span>
+    <span>Voir${seg("scope", scope, [["here", space?.name ?? "Cet espace"],["all","Tous les espaces"]])}</span>
+  </div>
+  <div class="thead"><span></span><span>Tâche</span><span>${groupBy === "project" ? "Sous-projet" : "Projet"}</span><span>Échéance</span><span>Pages</span><span>Statut</span></div>`;
+  if (!list.length) h += `<p class="empty" style="margin-top:22px">Aucune tâche ici.</p>`;
+  for (const g of grouped(list)) {
+    const pig = ["project", "sub", "space"].includes(groupBy) && g.key !== "Sans projet" ? `<span class="pig" style="background:${g.color}"></span>` : "";
+    h += `<div class="ghead">${pig}<span class="name">${esc(g.key)}</span><span class="n">${g.items.length}</span></div>`;
+    for (const t of g.items) {
+      const proj = groupBy === "project" ? `<span class="proj">${esc(t.sub)}</span>`
+        : `<span class="proj">${t.project ? `<span class="pig" style="background:${colorOf(t)}"></span>${esc(t.project)}${t.sub ? `<span class="sub">${esc(t.sub)}</span>` : ""}` : ""}</span>`;
+      h += `<div class="row ${t.status === "done" ? "done" : ""} ${freshID === t.id ? "fresh" : ""}">
+        <div class="tr" data-open="${t.id}" data-row="${t.id}">
+          <span class="box" data-s="${t.status}" data-cycle="${t.id}" title="Changer le statut"></span>
+          <span class="title">${esc(t.title)}</span>${proj}
+          <span class="due ${late(t) ? "late" : ""}">${t.due ? rel(t.due) : ""}</span>
+          <span class="pages">${t.links.map(fav).join("")}</span>
+          <span class="state" data-s="${t.status}">${STATUS[t.status]}</span>
+        </div>${open.has(t.id) ? sheet(t) : ""}</div>`;
+    }
+  }
+  paint(h);
+}
+
+function paint(h) {
+  // Ce qui est en cours de frappe dans le champ d'ajout survit au rafraîchissement de la page.
+  const focus = document.activeElement?.dataset?.keep, y = scrollY, typing = document.getElementById("add")?.value ?? "";
+  document.getElementById("main").innerHTML = h;
+  scrollTo(0, y);
+  const add = document.getElementById("add"); if (add) add.value = typing;
+  if (focus) document.querySelector(`[data-keep="${focus}"]`)?.focus();
+  openingID = freshID = null;
+  markSelection();
+}
+
+function sheet(t) {
+  const pages = t.links.map(l => `<div class="page" data-link="${esc(l.url)}">${mini(l, true)}<span class="t">${esc(l.title || hostOf(l.url))}</span><span class="h">${esc(hostOf(l.url))}</span><button class="x" data-unlink="${l.id}" title="Retirer">×</button></div>`).join("")
+    + `<div class="page add" data-pick="${t.id}"><span class="mini big">+ Lier une page</span></div>`;
+  const pick = picker === t.id ? `<div class="picker">
+      ${S.tabs.filter(tab => !t.links.some(l => l.url === tab.url)).slice(0, 8).map(tab => `<button data-linktab="${t.id}" data-url="${esc(tab.url)}" data-title="${esc(tab.title)}"><span>${esc(tab.title || hostOf(tab.url))}</span><span>${esc(tab.space)}</span></button>`).join("")}
+      <input data-linkurl="${t.id}" data-keep="linkurl-${t.id}" placeholder="Ou colle une adresse, puis ↩" spellcheck="false"></div>` : "";
+  const subs = t.subtasks.map(s => `<div class="subtask ${s.done ? "ok" : ""}"><span class="sbox" data-subdone="${s.id}" data-done="${s.done ? 1 : 0}"></span><span class="st">${esc(s.title)}</span><button class="del" data-subdel="${s.id}" title="Retirer">×</button></div>`).join("");
+  const n = t.due ? diff(t.due) : null;
+  return `<div class="open-sheet ${openingID === t.id ? "opening" : ""}">
+    <div>
+      <input class="plain t-title" data-edit="title" data-id="${t.id}" data-keep="title-${t.id}" value="${esc(t.title)}" spellcheck="false">
+      <div class="block"><h4>Notes</h4><textarea data-notes="${t.id}" data-keep="notes-${t.id}" placeholder="Écrire une note…">${esc(t.notes)}</textarea></div>
+      <div class="block"><h4>Pages liées</h4><div class="pagelist">${pages}</div>${pick}</div>
+    </div>
+    <div>
+      <div class="block"><h4>Échéance</h4>
+        ${t.due ? `<div class="due-big ${late(t) ? "late-c" : ""}">${esc(fmt(t.due, { day: "numeric", month: "long" }))}</div><div class="due-rel ${late(t) ? "late-c" : ""}">${rel(t.due)}</div>` : `<div class="due-rel">Aucune</div>`}
+        <div class="due-row"><input type="date" class="date-in" data-due="${t.id}" value="${t.due ?? ""}">${t.due ? `<button class="linkish" data-nodue="${t.id}">Retirer</button>` : ""}</div></div>
+      <div class="block"><h4>Statut</h4><div class="statuses">${ORDER.map(s => `<button data-set="${t.id}" data-s="${s}" class="${t.status === s ? "on" : ""}">${STATUS[s]}</button>`).join("")}</div></div>
+      <div class="block"><h4>Sous-tâches</h4><div class="subs">${subs}<input class="sub-add" data-addsub="${t.id}" data-keep="addsub-${t.id}" placeholder="Ajouter une sous-tâche…" spellcheck="false"></div></div>
+      <div class="block"><h4>Rangement</h4><div class="where">
+        <input data-edit="project" data-id="${t.id}" value="${esc(t.project)}" placeholder="Projet" list="projects" spellcheck="false">
+        <input data-edit="sub" data-id="${t.id}" value="${esc(t.sub)}" placeholder="Sous-projet" spellcheck="false"></div>
+        <datalist id="projects">${[...new Set(S.tasks.map(x => x.project).filter(Boolean))].map(p => `<option value="${esc(p)}">`).join("")}</datalist></div>
+      <button class="danger ${armedDelete === t.id ? "armed" : ""}" data-delete="${t.id}">${armedDelete === t.id ? "Confirmer la suppression" : "Supprimer la tâche"}</button>
+    </div></div>`;
+}
+
+// ───────── Mises à jour ─────────
+async function apply(name, args) { S = await call(name, args); render(); }
+
+function markSelection() {
+  const rows = [...document.querySelectorAll("[data-row]")];
+  rows.forEach((r, i) => r.classList.toggle("sel", i === selected));
+}
+
+// Saisie rapide : ce qui est reconnu devient des étiquettes.
+let parseTimer = null;
+document.addEventListener("input", e => {
+  if (e.target.id === "add") {
+    clearTimeout(parseTimer);
+    const text = e.target.value;
+    parseTimer = setTimeout(async () => {
+      const p = await call("parse", { text });
+      // Réponse dépassée (champ vidé ou retapé entre-temps) : on l'ignore.
+      const chips = document.getElementById("chips"); if (!chips || !p || document.getElementById("add")?.value !== text) return;
+      chips.innerHTML = (p.project ? `<span class="chip">${esc(p.project)}${p.sub ? " › " + esc(p.sub) : ""}</span>` : "")
+        + (p.due ? `<span class="chip">${esc(fmt(p.due, { weekday: "short", day: "numeric", month: "short" }))}</span>` : "");
+    }, 60);
+  }
+  if (e.target.dataset.notes) {
+    const id = +e.target.dataset.notes, notes = e.target.value;
+    clearTimeout(e.target.timer);
+    e.target.timer = setTimeout(async () => { S = await call("update", { id, changes: { notes } }); }, 400);
+  }
+});
+
+document.addEventListener("change", e => {
+  const el = e.target;
+  if (el.dataset.edit) apply("update", { id: +el.dataset.id, changes: { [el.dataset.edit]: el.value } });
+  if (el.dataset.due) apply("update", { id: +el.dataset.due, changes: { due: el.value || null } });
+});
+
+document.addEventListener("keydown", async e => {
+  const el = e.target;
+  if (el.id === "add" && e.key === "Enter" && el.value.trim()) {
+    // Le champ se vide tout de suite : la tâche suivante peut se taper pendant l'enregistrement.
+    const text = el.value, before = new Set(S.tasks.map(t => t.id));
+    clearTimeout(parseTimer); el.value = ""; document.getElementById("chips").innerHTML = "";
+    S = await call("add", { text, spaceID: viewSpace });
+    freshID = S.tasks.find(t => !before.has(t.id))?.id ?? null;
+    render();
+    document.getElementById("add")?.focus();
+    return;
+  }
+  if (el.dataset.addsub && e.key === "Enter" && el.value.trim()) { await apply("addSub", { id: +el.dataset.addsub, title: el.value }); return; }
+  if (el.dataset.linkurl && e.key === "Enter" && el.value.trim()) { picker = null; await apply("addLink", { id: +el.dataset.linkurl, url: el.value.trim(), title: "" }); return; }
+  if (el.dataset.edit === "title" && e.key === "Enter") { el.blur(); return; }
+  if (e.key === "Escape" && el.matches("input, textarea")) { el.blur(); if (picker) { picker = null; render(); } return; }
+  if (el.matches("input, textarea")) return;
+
+  // Clavier sur la liste.
+  const rows = [...document.querySelectorAll("[data-row]")];
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    selected = Math.max(0, Math.min(rows.length - 1, selected + (e.key === "ArrowDown" ? 1 : -1)));
+    markSelection(); rows[selected]?.scrollIntoView({ block: "nearest" });
+  } else if ((e.key === "Enter" || e.key === " ") && rows[selected] && !e.metaKey) {
+    e.preventDefault(); toggle(+rows[selected].dataset.row);
+  } else if (e.key === "Enter" && e.metaKey && rows[selected]) {
+    e.preventDefault(); cycle(+rows[selected].dataset.row);
+  } else if ((e.key === "n" || e.key === "/") && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault(); document.getElementById("add")?.focus();
+  }
+});
+
+function toggle(id) {
+  if (open.has(id)) open.delete(id); else { open.add(id); openingID = id; }
+  armedDelete = null; picker = null;
+  render();
+}
+
+// La case change de forme et le titre se barre sur place ; la ligne ne change de groupe qu'ensuite.
+let cycleTimer = null;
+async function cycle(id) {
+  const t = task(id);
+  const next = { todo: "doing", doing: "waiting", waiting: "done", done: "todo" }[t.status];
+  t.status = next;
+  document.querySelectorAll(`[data-cycle="${id}"]`).forEach(b => {
+    b.dataset.s = next; const row = b.closest(".row"); row.classList.toggle("done", next === "done");
+    const st = row.querySelector(".state"); st.dataset.s = next; st.textContent = STATUS[next];
+  });
+  const fresh = await call("update", { id, changes: { status: next } });
+  clearTimeout(cycleTimer); cycleTimer = setTimeout(() => { S = fresh; render(); }, 650);
+}
+
+document.addEventListener("click", async e => {
+  const q = s => e.target.closest(s);
+  let el;
+  if ((el = q("[data-mode]"))) { mode = el.dataset.mode; document.body.classList.toggle("papier", mode === "papier"); call("prefs", { mode }); return renderRail(); }
+  if ((el = q("[data-view]"))) { viewSpace = el.dataset.view; projectFilter = null; selected = -1; return render(); }
+  if ((el = q("[data-proj]"))) { projectFilter = el.dataset.proj ? [el.dataset.proj, el.dataset.sub] : null; selected = -1; return render(); }
+  if ((el = q("[data-group]"))) { groupBy = el.dataset.group; call("prefs", { groupBy }); return render(); }
+  if ((el = q("[data-sort]"))) { sortBy = el.dataset.sort; call("prefs", { sortBy }); return render(); }
+  if ((el = q("[data-scope]"))) { scope = el.dataset.scope; projectFilter = null; call("prefs", { scope }); return render(); }
+  if ((el = q("[data-cycle]"))) return cycle(+el.dataset.cycle);
+  if ((el = q("[data-set]"))) return apply("update", { id: +el.dataset.set, changes: { status: el.dataset.s } });
+  if ((el = q("[data-nodue]"))) return apply("update", { id: +el.dataset.nodue, changes: { due: null } });
+  if ((el = q("[data-subdone]"))) return apply("setSub", { id: +el.dataset.subdone, done: el.dataset.done !== "1" });
+  if ((el = q("[data-subdel]"))) return apply("deleteSub", { id: +el.dataset.subdel });
+  if ((el = q("[data-unlink]"))) return apply("deleteLink", { id: +el.dataset.unlink });
+  if ((el = q("[data-linktab]"))) { picker = null; return apply("addLink", { id: +el.dataset.linktab, url: el.dataset.url, title: el.dataset.title }); }
+  if ((el = q("[data-pick]"))) { const id = +el.dataset.pick; picker = picker === id ? null : id; render(); document.querySelector(`[data-linkurl="${id}"]`)?.focus(); return; }
+  if ((el = q("[data-link]"))) return call("open", { url: el.dataset.link });
+  if ((el = q("[data-delete]"))) {
+    const id = +el.dataset.delete;
+    if (armedDelete !== id) { armedDelete = id; render(); setTimeout(() => { if (armedDelete === id) { armedDelete = null; render(); } }, 3000); return; }
+    armedDelete = null; open.delete(id); return apply("delete", { id });
+  }
+  if (q(".open-sheet")) return;
+  if ((el = q("[data-open]"))) {
+    const id = +el.dataset.open;
+    const rows = [...document.querySelectorAll("[data-row]")];
+    selected = rows.findIndex(r => +r.dataset.row === id);
+    toggle(id);
+    if (el.classList.contains("fiche")) document.querySelector(`[data-row="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+});
+
+// L'app redonne l'état quand il change ailleurs (autre fenêtre, espace changé) : `visionHome.refresh()`.
+window.visionHome = {
+  async refresh(spaceID) {
+    S = await call("state");
+    if (spaceID) { viewSpace = spaceID; projectFilter = null; }
+    render();
+  },
+  focusAdd() { document.getElementById("add")?.focus(); },
+};
+
+(async () => {
+  S = await call("state");
+  viewSpace = S.space?.id ?? S.spaces[0]?.id;
+  ({ groupBy = groupBy, sortBy = sortBy, scope = scope, mode = mode } = S.prefs ?? {});
+  document.body.classList.toggle("papier", mode === "papier");
+  render();
+  requestAnimationFrame(() => document.body.classList.add("ready"));
+})();
+</script>
+</body>
+</html>

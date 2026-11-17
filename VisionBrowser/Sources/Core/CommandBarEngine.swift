@@ -24,6 +24,8 @@ struct CommandResult: Equatable, Sendable {
         case newSpace
         /// Renommer l'espace affiché.
         case renameSpace
+        /// Page d'accueil (les tâches).
+        case home
         case switchSpace(UUID)
         case moveTab(UUID)
         /// « Toujours ouvrir ce site dans cet espace » (règle de routage).
@@ -98,7 +100,8 @@ struct CommandBarEngine {
         var currentSpaceIsEmpty = false
     }
 
-    static let maxResults = 9
+    /// Assez pour faire défiler la liste de `Cmd+T` (8 lignes visibles environ), sans noyer les meilleurs résultats.
+    static let maxResults = 40
 
     /// - Parameter clipboard: l'historique du presse-papier (le moteur y cherche lui-même).
     func results(for rawQuery: String, tabs: [OpenTabInfo], context: Context, suggestions: [String] = [],
@@ -167,7 +170,7 @@ struct CommandBarEngine {
 
         // 4. Favoris et historique (une page déjà ouverte ou archivée n'est pas répétée).
         let shownKeys = openKeys.union(archivedKeys)
-        for place in places?.search(query, limit: 8) ?? [] where !shownKeys.contains(PlacesStore.key(place.url)) {
+        for place in places?.search(query, limit: 20) ?? [] where !shownKeys.contains(PlacesStore.key(place.url)) {
             let host = PlacesStore.host(place.url)
             guard seenPages.insert(pageKey(place.url, place.title)).inserted else { continue }
             results.append(.init(kind: place.isFavorite ? .favorite : .history, title: place.title?.nonEmpty ?? host,
@@ -214,21 +217,23 @@ struct CommandBarEngine {
         return Array(results.sorted { $0.score > $1.score }.prefix(Self.maxResults))
     }
 
-    /// `Cmd+T` sans rien taper : les onglets ouverts (récents d'abord), puis les favoris.
+    /// `Cmd+T` sans rien taper : les 6 onglets les plus récents, ce qu'on vient de copier, les favoris, puis, en
+    /// faisant défiler, le reste des onglets ouverts et des favoris. Le premier écran reste celui d'avant le défilement.
     func emptyQueryResults(tabs: [OpenTabInfo], clipboard: ClipboardHistory = ClipboardHistory(), now: Date = Date()) -> [CommandResult] {
-        let recent = tabs.sorted { $0.lastActivated > $1.lastActivated }.prefix(6).enumerated().map { index, tab in
+        let recent = tabs.sorted { $0.lastActivated > $1.lastActivated }.map { tab in
             CommandResult(kind: .openTab(id: tab.id, space: tab.space), title: tab.title?.nonEmpty ?? PlacesStore.host(tab.url ?? URL(string: "about:blank")!),
-                          subtitle: tab.url.map(PlacesStore.host) ?? "", url: tab.url, score: 100 - Double(index))
+                          subtitle: tab.url.map(PlacesStore.host) ?? "", url: tab.url, score: 0)
         }
         let openKeys = Set(tabs.compactMap { $0.url.map(PlacesStore.key) })
-        let favorites = (places?.favorites(limit: 6) ?? []).filter { !openKeys.contains(PlacesStore.key($0.url)) }.enumerated().map { index, place in
+        let favorites = (places?.favorites(limit: 20) ?? []).filter { !openKeys.contains(PlacesStore.key($0.url)) }.map { place in
             CommandResult(kind: .favorite, title: place.title?.nonEmpty ?? PlacesStore.host(place.url), subtitle: PlacesStore.host(place.url),
-                          url: place.url, isFavorite: true, score: 50 - Double(index))
+                          url: place.url, isFavorite: true, score: 0)
         }
         // Ce qu'on vient de copier (moins de 5 min) : souvent, on ouvre Cmd+T précisément pour ça.
         let justCopied = clipboard.items.first.flatMap { now.timeIntervalSince($0.copiedAt) < 300 ? $0 : nil }
-            .map { [clipboardResult($0, now: now, score: 75)] } ?? []
-        return Array((recent + justCopied + favorites).sorted { $0.score > $1.score }.prefix(Self.maxResults))
+            .map { [clipboardResult($0, now: now, score: 0)] } ?? []
+        let ordered: [CommandResult] = Array(recent.prefix(6)) + justCopied + Array(favorites.prefix(6)) + Array(recent.dropFirst(6)) + Array(favorites.dropFirst(6))
+        return Array(ordered.prefix(Self.maxResults))
     }
 
     private func clipboardResult(_ item: ClipboardItem, now: Date, score: Double) -> CommandResult {
@@ -244,6 +249,7 @@ struct CommandBarEngine {
         guard let first = tokens.first, first.count >= 2 else { return [] }
         var catalog: [(CommandResult.CommandID, String, String)] = [
             (.newSpace, "Nouvel espace", "nouvel nouveau espace creer"),
+            (.home, "Accueil : les tâches", "accueil taches tache projets liste todo programme"),
         ]
         if let current = context.spaces.first(where: { $0.id == context.currentSpaceID }) {
             catalog.append((.renameSpace, "Renommer l'espace « \(current.name) »", "renommer espace nom changer \(current.name)"))

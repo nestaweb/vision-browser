@@ -12,7 +12,8 @@ final class SettingsWindowController: NSWindowController {
         let tabs = NSTabViewController()
         tabs.tabStyle = .toolbar
         for (pane, title, symbol) in [(GeneralSettingsPane(), "Général", "gearshape"),
-                                      (SearchSettingsPane(), "Recherche", "magnifyingglass")] as [(NSViewController, String, String)] {
+                                      (SearchSettingsPane(), "Recherche", "magnifyingglass"),
+                                      (ShortcutSettingsPane(), "Raccourcis", "keyboard")] as [(NSViewController, String, String)] {
             pane.title = title  // sinon la fenêtre s'appelle « Untitled » (titre repris du volet affiché)
             let item = NSTabViewItem(viewController: pane)
             item.label = title
@@ -150,5 +151,112 @@ private final class SearchSettingsPane: SettingsPane {
     @objc private func suggestionsChanged(_ sender: NSButton) {
         settings.searchSuggestions = sender.state == .on
         refresh()
+    }
+}
+
+@MainActor
+private final class ShortcutSettingsPane: SettingsPane {
+    private let recorder = ShortcutRecorder()
+    private let reset = NSButton(title: "Rétablir ⌘@", target: nil, action: nil)
+    private let message = SettingsPane.note("")
+
+    override func build() {
+        recorder.shortcut = settings.overviewShortcut
+        recorder.onRecord = { [weak self] shortcut in self?.record(shortcut) }
+        reset.target = self
+        reset.action = #selector(resetShortcut)
+        let controls = NSStackView(views: [recorder, reset])
+        controls.spacing = 8
+        addRow("Vue d'ensemble des onglets :", controls)
+        addRow("", message)
+        showHint()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        recorder.stopRecording()
+    }
+
+    private func record(_ shortcut: KeyShortcut) {
+        if let problem = shortcut.problem { return showError(problem) }
+        if let owner = MainMenu.owner(of: shortcut) { return showError("\(shortcut.display) sert déjà à « \(owner) ».") }
+        save(shortcut)
+    }
+
+    @objc private func resetShortcut() {
+        recorder.stopRecording()
+        save(.overviewDefault)
+    }
+
+    private func save(_ shortcut: KeyShortcut) {
+        settings.overviewShortcut = shortcut
+        recorder.shortcut = shortcut
+        MainMenu.applyOverviewShortcut(shortcut)
+        showHint()
+    }
+
+    private func showHint() {
+        reset.isEnabled = settings.overviewShortcut != .overviewDefault
+        message.textColor = .secondaryLabelColor
+        message.stringValue = "Clique sur le raccourci puis tape le nouveau (Échap annule). Le même raccourci referme la vue d'ensemble. "
+            + "Échap l'ouvre aussi, quand la page ne s'en sert pas."
+    }
+
+    private func showError(_ text: String) {
+        message.textColor = .systemRed
+        message.stringValue = text + " Essaie une autre combinaison."
+    }
+}
+
+/// Bouton qui affiche un raccourci ; cliqué, il attend la combinaison suivante et la transmet.
+///
+/// La frappe est lue par un moniteur local : sans lui, une combinaison avec ⌘ partirait d'abord vers les menus
+/// (et déclencherait la commande au lieu d'être enregistrée).
+@MainActor
+private final class ShortcutRecorder: NSButton {
+    var shortcut = KeyShortcut.overviewDefault { didSet { refresh() } }
+    var onRecord: ((KeyShortcut) -> Void)?
+    private var monitor: Any?
+
+    init() {
+        super.init(frame: .zero)
+        bezelStyle = .push
+        setButtonType(.momentaryPushIn)
+        font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        target = self
+        action = #selector(toggle)
+        widthAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
+        refresh()
+    }
+
+    required init?(coder: NSCoder) { fatalError("non utilisé") }
+
+    @objc private func toggle() {
+        monitor == nil ? startRecording() : stopRecording()
+    }
+
+    private func startRecording() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            if event.keyCode == 53, flags.isEmpty { self.stopRecording(); return nil }
+            // Rangée des chiffres : la touche physique, comme les raccourcis ⌘1…9 (⌘& sur un clavier français = ⌘1).
+            let key = BrowserWindowController.digitRow[event.keyCode].map(String.init) ?? event.charactersIgnoringModifiers ?? ""
+            let shortcut = KeyShortcut(key: key, modifiers: UInt(flags.rawValue))
+            self.stopRecording()
+            self.onRecord?(shortcut)
+            return nil
+        }
+        refresh()
+    }
+
+    func stopRecording() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        refresh()
+    }
+
+    private func refresh() {
+        title = monitor == nil ? shortcut.display : "Tape le raccourci…"
     }
 }

@@ -18,6 +18,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var activeBySpace: [UUID: BrowserTab] = [:]
     /// L'onglet dont la page est à l'écran.
     private var displayedTab: BrowserTab?
+    /// La page d'accueil (les tâches) : affichée dans un espace sans onglet, ou à la demande (⇧⌘H, Cmd+T « Accueil »).
+    private let home = HomePage()
+    private var homeVisible = false
     /// Onglets fermés (adresse et espace), pour ⇧⌘T.
     private var closedTabs: [(url: URL, spaceID: UUID)] = []
     /// Onglets rangés automatiquement après 12 h sans consultation.
@@ -107,6 +110,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         window.delegate = self
         window.onEscape = { [weak self] in self?.handleEscape() }
         pageContainer.onEscape = { [weak self] in self?.handleEscape() }
+        home.host = self
         buildInterface()
         host.window = self
         DownloadManager.shared.onFinished = { [weak self] url in
@@ -319,10 +323,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if let tab = activeBySpace[space.id] ?? tabsBySpace[space.id]?.last {
             display(tab, announce: announce, from: from)
         } else {
-            retireDisplayedPage()
-            updateChrome(announce: false)
-            if announce { announceSpace("Espace vide", symbol: "square.dashed") }
-            if overview.isHidden { showCommandBar(newTab: true) }
+            showHome()
         }
         onSpacesChanged?()
         scheduleSessionSave()
@@ -348,6 +349,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         updateWindowTitle()
         onSpacesChanged?()
         overview.renameSpace(id, to: space.name)
+        if homeVisible { home.show(space: currentSpace.id) }
     }
 
     /// Supprime l'espace affiché : ferme ses onglets, puis efface ses données (cookies, sessions).
@@ -469,6 +471,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let previous = displayedTab
         let transition = pageTransition(from: previous, fromSpace: fromSpace, to: tab)
         displayedTab = tab
+        homeVisible = false
         let view = tab.webView
         if view.superview !== pageContainer {
             view.removeFromSuperview()
@@ -555,8 +558,35 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func retireDisplayedPage() {
         displayedTab = nil
+        homeVisible = false
         hidePages(except: nil)
         loadingLine.update(loading: false, progress: 0, color: .clear, reset: true)
+    }
+
+    /// Met l'accueil à l'écran, à la place de la page (qui reste ouverte, masquée).
+    func showHome() {
+        let view = home.webView
+        if view.superview !== pageContainer {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            pageContainer.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: pageContainer.topAnchor),
+                view.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
+                view.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
+            ])
+        }
+        displayedTab = nil
+        homeVisible = true
+        pageLayerOrder += 1
+        view.wantsLayer = true
+        view.layer?.zPosition = CGFloat(pageLayerOrder)
+        view.isHidden = false
+        hidePages(except: view)
+        loadingLine.update(loading: false, progress: 0, color: .clear, reset: true)
+        home.show(space: currentSpace.id)
+        if !commandBar.isOpen && overview.isHidden { window?.makeFirstResponder(view) }
+        updateChrome(announce: false)
     }
 
     func close(_ tab: BrowserTab) { close(tab, rememberForReopen: true) }
@@ -574,10 +604,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             activeBySpace[spaceID] = TabOrganizer.recentFirst(list.map(info)).first.flatMap { info in list.first { $0.id == info.id } }
             if tab.space === currentSpace {
                 if let next = activeBySpace[spaceID] { display(next, announce: true) }
-                else {
-                    updateChrome(announce: false)
-                    if overview.isHidden { showCommandBar(newTab: true) }
-                }
+                else { showHome() }
             }
         }
         scheduleSessionSave()
@@ -617,7 +644,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Indicateur de domaine (avec l'espace dès qu'il y en a plusieurs) et liseré « non sécurisé ».
     private func updateChrome(announce: Bool) {
-        let url = activeTab?.url
+        let url = homeVisible ? nil : activeTab?.url
         insecureStripe.isHidden = !DomainPolicy.isInsecure(url)
         updateWindowTitle()
         if announce, let host = DomainPolicy.displayHost(for: url) {
@@ -630,7 +657,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Le titre de la fenêtre (Mission Control, menu Fenêtre) rappelle l'espace.
     private func updateWindowTitle() {
-        let page = activeTab?.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Vision Browser"
+        let page = homeVisible ? "Accueil" : activeTab?.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Vision Browser"
         window?.title = spaces.count > 1 ? "\(page) · \(currentSpace.name)" : page
     }
 
@@ -715,7 +742,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: Ctrl+Tab (ordre d'utilisation récente)
 
     /// Touches de la rangée des chiffres, par position physique (identique sur QWERTY et AZERTY).
-    private static let digitRow: [UInt16: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9, 29: 0]
+    static let digitRow: [UInt16: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9, 29: 0]
 
     /// ⌘1…9 (onglet), ⌘0 (taille réelle), ⌃1…9 (espace), quelle que soit la disposition du clavier.
     ///
@@ -803,9 +830,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if commandBar.isOpen { return hideCommandBar() }
         // Même effet que dans la Scène : effacer le filtre, sinon revenir à la page d'avant.
         if !overview.isHidden { return overview.handleEscape() }
-        guard let view = displayedTab?.liveWebView else { return showOverview() }
+        guard let view = displayedTab?.liveWebView ?? (homeVisible ? home.webView : nil) else { return showOverview() }
         Task { [weak self] in
-            guard await !EscapeRelay.shared.pageIsBusy(view), let self, view === self.displayedTab?.liveWebView else { return }
+            guard await !EscapeRelay.shared.pageIsBusy(view), let self,
+                  view === self.displayedTab?.liveWebView || (self.homeVisible && view === self.home.webView) else { return }
             self.showOverview()
         }
     }
@@ -855,6 +883,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             self.closeOverview(expanding: self.activeTab?.id)
         }
         overview.onRenameSpace = { [weak self] id, name in self?.renameSpace(id, to: name) }
+        overview.onPin = { [weak self] id, pinned in
+            guard let self, let tab = self.tab(id) else { return }
+            self.setPinned(tab, pinned)
+            self.overview.reload()
+        }
+        overview.onCloseTab = { [weak self] id in
+            guard let self, let tab = self.tab(id) else { return }
+            self.close(tab)
+            self.overview.reload()
+        }
         overview.onShowSpace = { [weak self] id in
             guard let self, let space = self.space(id), space !== self.currentSpace else { return }
             self.switchTo(space, announce: false)
@@ -878,10 +916,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         Task { [weak self] in
             await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
             guard let self else { return }
+            // Sur l'accueil, la Scène montre l'accueil en grand.
+            let homeImage = self.homeVisible ? try? await self.home.webView.takeSnapshot(configuration: nil) : nil
             self.overviewOpening = false
             self.overview.present(spaces: self.spaces.map { .init(id: $0.id, name: $0.name, color: $0.color) },
                                   showing: self.currentSpace.id, activeTabID: self.activeTab?.id,
-                                  pageImage: self.displayedTab?.snapshot)
+                                  pageImage: homeImage ?? self.displayedTab?.snapshot)
         }
     }
 
@@ -890,7 +930,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         overview.dismiss(expanding: id) { [weak self] in
             guard let self else { return }
             if let view = self.displayedTab?.liveWebView { self.window?.makeFirstResponder(view) }
-            else { self.showCommandBar(newTab: true) }
+            else { self.showHome() }
         }
     }
 
@@ -930,7 +970,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         setBarBackdrop(visible: false)
         // Sans page (espace vide), le clavier revient à la fenêtre : sinon il reste dans le champ caché
         // (la frappe se perd, et ⇧← ⇧→ sont désactivés comme dans un champ de texte).
-        if let webView = displayedTab?.liveWebView { window?.makeFirstResponder(webView) } else { window?.makeFirstResponder(nil) }
+        if let webView = displayedTab?.liveWebView { window?.makeFirstResponder(webView) }
+        else { window?.makeFirstResponder(homeVisible ? home.webView : nil) }
     }
 
     /// Derrière la barre : la page recule d'un pas (98,5 %) et un voile uni se pose dessus.
@@ -1061,6 +1102,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             newSpaceAction(nil)
         case .command(.renameSpace):
             renameSpaceAction(nil)
+        case .command(.home):
+            showHome()
         case .command(.switchSpace(let id)):
             if let space = space(id) { switchTo(space) }
         case .command(.moveTab(let id)):
@@ -1273,8 +1316,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         setPinned(tab, !tab.isPinned)
         overview.reload()
     }
+    @objc func showHomeAction(_ sender: Any?) {
+        if commandBar.isOpen { hideCommandBar() }
+        if !overview.isHidden { overview.isHidden = true }
+        showHome()
+        home.focusAddField()
+    }
     @objc func showOverviewAction(_ sender: Any?) {
-        overview.isHidden ? showOverview() : closeOverview(expanding: activeTab?.id)
+        // Deuxième appui : comme Échap, retour à la page d'où l'on venait.
+        overview.isHidden ? showOverview() : overview.returnToOrigin()
     }
     @objc func closeTabAction(_ sender: Any?) {
         if commandBar.isOpen { return hideCommandBar() }
@@ -1450,4 +1500,18 @@ private extension NSLayoutConstraint {
         self.priority = priority
         return self
     }
+}
+
+// MARK: - Accueil
+
+extension BrowserWindowController: HomePageHost {
+    var homeSpaces: [(id: UUID, name: String, colorIndex: Int)] { spaces.map { ($0.id, $0.name, $0.colorIndex) } }
+    var homeCurrentSpaceID: UUID { currentSpace.id }
+    var homeOpenTabs: [(title: String, url: URL, space: String)] {
+        allTabs.sorted { $0.lastActivated > $1.lastActivated }.compactMap { tab in
+            guard let url = tab.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+            return (tab.title?.isEmpty == false ? tab.title! : PlacesStore.host(url), url, tab.space.name)
+        }
+    }
+    func homeOpen(_ url: URL) { newTab(url: url, in: currentSpace, activate: true) }
 }

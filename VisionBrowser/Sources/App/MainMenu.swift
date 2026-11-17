@@ -80,7 +80,11 @@ enum MainMenu {
         main.addItem(submenu("Présentation", [
             item("Recharger la page", #selector(BrowserWindowController.reloadAction(_:)), "r"),
             .separator(),
-            item("Vue d'ensemble des onglets", #selector(BrowserWindowController.showOverviewAction(_:)), "o", [.command, .shift]),
+            // ⌘@ par défaut, réglable (Réglages > Raccourcis) : la touche sous Échap sur un clavier français, à une main,
+            // et libre dans macOS (⌘< change de fenêtre). Contrairement à Échap, elle marche aussi quand la page se sert
+            // de la touche (champ, vidéo, dialogue).
+            overviewItem(),
+            alternate(#selector(BrowserWindowController.showOverviewAction(_:)), "o", [.command, .shift]),
             alternate(#selector(BrowserWindowController.showOverviewAction(_:)), "\\", [.command, .shift]),
             .separator(),
             item("Zoom avant", #selector(BrowserWindowController.zoomInAction(_:)), "="),
@@ -96,6 +100,7 @@ enum MainMenu {
             // Dans un champ de la page, la page les utilise d'abord (début / fin de ligne).
             item("Page précédente", #selector(BrowserWindowController.goBackAction(_:)), arrow(NSLeftArrowFunctionKey)),
             item("Page suivante", #selector(BrowserWindowController.goForwardAction(_:)), arrow(NSRightArrowFunctionKey)),
+            item("Accueil", #selector(BrowserWindowController.showHomeAction(_:)), "h", [.command, .shift]),
             alternate(#selector(BrowserWindowController.goBackAction(_:)), "["),
             alternate(#selector(BrowserWindowController.goForwardAction(_:)), "]"),
             .separator(),
@@ -163,6 +168,48 @@ enum MainMenu {
         guard !commands.isEmpty else { return }
         menu.addItem(.separator())
         commands.forEach { menu.addItem($0.menuItem) }
+    }
+
+    private static let overviewID = NSUserInterfaceItemIdentifier("vb.overview")
+
+    private static func overviewItem() -> NSMenuItem {
+        let menuItem = item("Vue d'ensemble des onglets", #selector(BrowserWindowController.showOverviewAction(_:)))
+        menuItem.identifier = overviewID
+        apply(BrowserSettings().overviewShortcut, to: menuItem)
+        return menuItem
+    }
+
+    private static func apply(_ shortcut: KeyShortcut, to menuItem: NSMenuItem) {
+        // Le raccourci est choisi sur le clavier de la personne : macOS ne doit pas le « traduire » pour sa disposition
+        // (sinon « @ » devient « 2 » sur un clavier français, et ⌘@ ne déclenche rien).
+        menuItem.allowsAutomaticKeyEquivalentLocalization = false
+        menuItem.keyEquivalent = shortcut.key
+        menuItem.keyEquivalentModifierMask = NSEvent.ModifierFlags(rawValue: shortcut.modifiers)
+    }
+
+    /// Pose le raccourci réglé sur l'élément « Vue d'ensemble » (appelé par les Réglages, effet immédiat).
+    static func applyOverviewShortcut(_ shortcut: KeyShortcut) {
+        guard let menuItem = allItems(in: NSApp.mainMenu).first(where: { $0.identifier == overviewID }) else { return }
+        apply(shortcut, to: menuItem)
+    }
+
+    /// Le nom de la commande qui utilise déjà ce raccourci, ou `nil` s'il est libre (la vue d'ensemble elle-même exclue).
+    static func owner(of shortcut: KeyShortcut) -> String? {
+        let mask = NSEvent.ModifierFlags(rawValue: shortcut.modifiers)
+        let menus = allItems(in: NSApp.mainMenu)
+        guard let taken = menus.first(where: { menuItem in
+            menuItem.action != #selector(BrowserWindowController.showOverviewAction(_:)) && !menuItem.keyEquivalent.isEmpty
+                && menuItem.keyEquivalent.lowercased() == shortcut.key
+                && menuItem.keyEquivalentModifierMask.intersection([.command, .control, .option, .shift])
+                    .union(menuItem.keyEquivalent != menuItem.keyEquivalent.lowercased() ? .shift : []) == mask
+        }) else { return nil }
+        // Raccourci de secours (élément caché, sans titre) : on nomme la commande visible qui a la même action.
+        if !taken.title.isEmpty { return taken.title }
+        return menus.first { $0.action == taken.action && !$0.title.isEmpty }?.title ?? "une autre commande"
+    }
+
+    private static func allItems(in menu: NSMenu?) -> [NSMenuItem] {
+        (menu?.items ?? []).flatMap { [$0] + allItems(in: $0.submenu) }
     }
 
     /// Raccourci de secours : invisible dans le menu, mais actif (ex. ⌘[ sur un clavier QWERTY).

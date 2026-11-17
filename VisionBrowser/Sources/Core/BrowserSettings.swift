@@ -50,6 +50,7 @@ struct BrowserSettings {
         static let archiveAfterHours = "VBArchiveAfterHours"
         /// Option de lancement pour les essais (`-VBSleepAfterSeconds 30`) : prioritaire sur le réglage.
         static let sleepAfterSeconds = "VBSleepAfterSeconds"
+        static let overviewShortcut = "VBOverviewShortcut"
     }
 
     /// Choix proposés dans la fenêtre Réglages.
@@ -89,7 +90,68 @@ struct BrowserSettings {
 
     var archiveAfter: TimeInterval { TimeInterval(archiveAfterHours * 3600) }
 
+    /// Raccourci de la vue d'ensemble (la Scène) ; ⌘@ par défaut.
+    var overviewShortcut: KeyShortcut {
+        get {
+            guard let stored = defaults.dictionary(forKey: Key.overviewShortcut), let key = stored["key"] as? String,
+                  let modifiers = stored["modifiers"] as? Int else { return .overviewDefault }
+            let shortcut = KeyShortcut(key: key, modifiers: UInt(modifiers))
+            return shortcut.problem == nil ? shortcut : .overviewDefault
+        }
+        nonmutating set {
+            if newValue == .overviewDefault { return defaults.removeObject(forKey: Key.overviewShortcut) }
+            defaults.set(["key": newValue.key, "modifiers": Int(newValue.modifiers)], forKey: Key.overviewShortcut)
+        }
+    }
+
     private func positive(_ value: Int) -> Int? { value > 0 ? value : nil }
+}
+
+/// Un raccourci clavier : un caractère et des touches de modification, au format des menus macOS.
+///
+/// Les valeurs des modificateurs sont celles d'AppKit (`NSEvent.ModifierFlags`), pour passer telles quelles au menu.
+/// Le cœur reste sans AppKit (testable seul).
+struct KeyShortcut: Equatable, Sendable {
+    static let shift: UInt = 1 << 17, control: UInt = 1 << 18, option: UInt = 1 << 19, command: UInt = 1 << 20
+
+    /// Le caractère, en minuscule pour une lettre (Maj est alors dans `modifiers`).
+    let key: String
+    let modifiers: UInt
+
+    init(key: String, modifiers: UInt) {
+        let mods = modifiers & (Self.shift | Self.control | Self.option | Self.command)
+        // ⇧⌘O arrive en « O » : on garde « o » et Maj, comme le veulent les menus.
+        if key.count == 1, key.lowercased() != key.uppercased(), key == key.uppercased() {
+            self.key = key.lowercased()
+            self.modifiers = mods | Self.shift
+        } else {
+            self.key = key
+            self.modifiers = mods
+        }
+    }
+
+    static let overviewDefault = KeyShortcut(key: "@", modifiers: command)
+
+    /// Pourquoi ce raccourci est refusé, ou `nil` s'il convient.
+    var problem: String? {
+        guard key.count == 1, let scalar = key.unicodeScalars.first,
+              !CharacterSet.whitespacesAndNewlines.contains(scalar), !CharacterSet.controlCharacters.contains(scalar),
+              !(0xF700...0xF8FF).contains(scalar.value) else { return "Choisis une touche de caractère (lettre, chiffre, signe)." }
+        guard modifiers & (Self.command | Self.control | Self.option) != 0 else {
+            return "Ajoute ⌘, ⌃ ou ⌥ : seule, la touche servirait à taper du texte."
+        }
+        return nil
+    }
+
+    /// « ⌘@ », « ⌃⌥K » : dans l'ordre des menus macOS.
+    var display: String {
+        var text = ""
+        if modifiers & Self.control != 0 { text += "⌃" }
+        if modifiers & Self.option != 0 { text += "⌥" }
+        if modifiers & Self.shift != 0 { text += "⇧" }
+        if modifiers & Self.command != 0 { text += "⌘" }
+        return text + key.uppercased()
+    }
 }
 
 extension CharacterSet {
