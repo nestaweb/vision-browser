@@ -337,12 +337,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         return space
     }
 
-    func renameCurrentSpace(to name: String) {
-        config.rename(currentSpace.id, to: name)
-        currentSpace.name = config.space(currentSpace.id)?.name ?? currentSpace.name
+    func renameCurrentSpace(to name: String) { renameSpace(currentSpace.id, to: name) }
+
+    /// Renomme un espace (nom rendu unique par la configuration) ; menus, titre et Scène suivent.
+    func renameSpace(_ id: UUID, to name: String) {
+        guard let space = space(id) else { return }
+        config.rename(id, to: name)
+        space.name = config.space(id)?.name ?? space.name
         spacesStore.save(config)
         updateWindowTitle()
         onSpacesChanged?()
+        overview.renameSpace(id, to: space.name)
     }
 
     /// Supprime l'espace affiché : ferme ses onglets, puis efface ses données (cookies, sessions).
@@ -849,6 +854,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
             self.closeOverview(expanding: self.activeTab?.id)
         }
+        overview.onRenameSpace = { [weak self] id, name in self?.renameSpace(id, to: name) }
         overview.onShowSpace = { [weak self] id in
             guard let self, let space = self.space(id), space !== self.currentSpace else { return }
             self.switchTo(space, announce: false)
@@ -1053,6 +1059,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             toggleFavoriteForActiveTab()
         case .command(.newSpace):
             newSpaceAction(nil)
+        case .command(.renameSpace):
+            renameSpaceAction(nil)
         case .command(.switchSpace(let id)):
             if let space = space(id) { switchTo(space) }
         case .command(.moveTab(let id)):

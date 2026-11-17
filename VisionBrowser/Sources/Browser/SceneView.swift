@@ -28,6 +28,8 @@ final class SceneView: FlippedView {
     var onShowSpace: ((UUID) -> Void)?
     /// Onglet glissé sur un autre espace du rail.
     var onMove: ((UUID, UUID) -> Void)?
+    /// Double-clic sur un espace du rail, puis Entrée : nouveau nom.
+    var onRenameSpace: ((UUID, String) -> Void)?
     /// Échap : revenir à la page d'avant.
     var onDismiss: (() -> Void)?
 
@@ -239,6 +241,14 @@ final class SceneView: FlippedView {
         }
     }
 
+    /// Nom définitif d'un espace renommé (la fenêtre a pu le rendre unique) : le rail se met à jour.
+    func renameSpace(_ id: UUID, to name: String) {
+        guard let index = spaces.firstIndex(where: { $0.id == id }) else { return }
+        spaces[index].name = name
+        buildRail()
+        layoutScene()
+    }
+
     private func goSpace(by step: Int) {
         guard let current = spaces.firstIndex(where: { $0.id == shownSpaceID }) else { return }
         let next = SceneLayout.step(current, by: step, count: spaces.count)
@@ -372,6 +382,9 @@ final class SceneView: FlippedView {
                 self.show(space: space.id)
             }
             entry.onDropTab = { [weak self] tabID in self?.onMove?(tabID, space.id) }
+            entry.onRename = { [weak self] name in self?.onRenameSpace?(space.id, name) }
+            // Fin du renommage : le clavier revient à la Scène (flèches, Échap, filtre).
+            entry.onEditingEnded = { [weak self] in if let self { self.window?.makeFirstResponder(self) } }
             rail.addSubview(entry)
             return entry
         }
@@ -617,16 +630,22 @@ final class SceneThumbView: FlippedView, NSDraggingSource {
 
 /// Un espace du rail : son nom et son nombre d'onglets. Accepte une vignette déposée (déplacement vers cet espace).
 @MainActor
-private final class RailEntry: FlippedView {
+private final class RailEntry: FlippedView, NSTextFieldDelegate {
     var onClick: (() -> Void)?
     var onDropTab: ((UUID) -> Void)?
+    var onRename: ((String) -> Void)?
+    var onEditingEnded: (() -> Void)?
     private let label = NSTextField(labelWithString: "")
     private let isCurrent: Bool
+    private let spaceName: String
+    private var editor: NSTextField?
     private var dropping = false { didSet { updateStyle() } }
 
     init(space: SceneView.SpaceInfo, count: Int, isCurrent: Bool) {
         self.isCurrent = isCurrent
+        spaceName = space.name
         super.init(frame: .zero)
+        toolTip = "Double-clic pour renommer"
         let text = NSMutableAttributedString(string: space.name, attributes: [
             .font: isCurrent ? Design.Typography.bodyStrong : Design.Typography.body])
         text.append(NSAttributedString(string: "  \(count)", attributes: [.font: Design.Typography.small, .foregroundColor: Design.Palette.paper(.tertiary)]))
@@ -653,7 +672,56 @@ private final class RailEntry: FlippedView {
         }
     }
 
-    override func mouseUp(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { beginRenaming() }
+    }
+    override func mouseUp(with event: NSEvent) { if event.clickCount == 1 { onClick?() } }
+
+    // MARK: Renommer sur place
+
+    /// Le nom devient un champ, texte sélectionné : on tape le nouveau nom, Entrée valide, Échap annule.
+    func beginRenaming() {
+        guard editor == nil, onRename != nil else { return }
+        let field = NSTextField(string: spaceName)
+        field.font = Design.Typography.bodyStrong
+        field.textColor = Design.Palette.paper
+        field.backgroundColor = Design.Palette.paper.withAlphaComponent(0.08)
+        field.drawsBackground = true
+        field.isBordered = false
+        field.focusRingType = .none
+        field.cell?.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.delegate = self
+        field.frame = NSRect(x: -6, y: (bounds.height - 22) / 2, width: bounds.width + 6, height: 22)
+        field.wantsLayer = true
+        field.layer?.cornerRadius = 5
+        editor = field
+        label.isHidden = true
+        addSubview(field)
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)): finishRenaming(commit: true); return true
+        case #selector(NSResponder.cancelOperation(_:)): finishRenaming(commit: false); return true
+        default: return false
+        }
+    }
+
+    /// Clic ailleurs : le nom tapé est gardé.
+    func controlTextDidEndEditing(_ notification: Notification) { finishRenaming(commit: true) }
+
+    private func finishRenaming(commit: Bool) {
+        guard let field = editor else { return }
+        editor = nil   // avant de retirer le champ : sa fin d'édition rappelle cette fonction
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        field.removeFromSuperview()
+        label.isHidden = false
+        if commit, !name.isEmpty, name != spaceName { onRename?(name) }
+        onEditingEnded?()
+    }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard !isCurrent else { return [] }

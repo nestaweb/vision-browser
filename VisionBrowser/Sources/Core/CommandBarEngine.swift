@@ -22,6 +22,8 @@ struct CommandResult: Equatable, Sendable {
         case copyAddress
         case toggleFavorite
         case newSpace
+        /// Renommer l'espace affiché.
+        case renameSpace
         case switchSpace(UUID)
         case moveTab(UUID)
         /// « Toujours ouvrir ce site dans cet espace » (règle de routage).
@@ -243,6 +245,9 @@ struct CommandBarEngine {
         var catalog: [(CommandResult.CommandID, String, String)] = [
             (.newSpace, "Nouvel espace", "nouvel nouveau espace creer"),
         ]
+        if let current = context.spaces.first(where: { $0.id == context.currentSpaceID }) {
+            catalog.append((.renameSpace, "Renommer l'espace « \(current.name) »", "renommer espace nom changer \(current.name)"))
+        }
         switch context.bitwarden {
         case .locked: catalog.append((.unlockBitwarden, context.bitwardenBusy ? "Bitwarden se déverrouille… (quelques secondes)"
                                                                                : "Déverrouiller Bitwarden (recherche dans Cmd+T)",

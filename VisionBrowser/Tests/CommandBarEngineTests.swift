@@ -107,6 +107,10 @@ final class CommandBarEngineTests: XCTestCase {
         let commandKinds = { (query: String) in e.results(for: query, tabs: [], context: spaces).compactMap { result -> CommandResult.CommandID? in
             if case .command(let id) = result.kind { return id }; return nil } }
         XCTAssertTrue(commandKinds("nouvel esp").contains(.newSpace))
+        XCTAssertTrue(commandKinds("renommer").contains(.renameSpace))
+        XCTAssertTrue(commandKinds("renommer perso").contains(.renameSpace), "on peut aussi taper le nom de l'espace")
+        XCTAssertEqual(e.results(for: "renommer", tabs: [], context: spaces).first { $0.kind == .command(.renameSpace) }?.title,
+                       "Renommer l'espace « Perso »", "vise l'espace affiché")
         XCTAssertTrue(commandKinds("aller pro").contains(.switchSpace(proB)))
         XCTAssertFalse(commandKinds("aller perso").contains(.switchSpace(perso)), "on ne propose pas d'aller dans l'espace actuel")
         XCTAssertTrue(commandKinds("envoyer pro b").contains(.moveTab(proB)))
