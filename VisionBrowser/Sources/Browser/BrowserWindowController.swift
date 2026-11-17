@@ -65,6 +65,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var overviewOpening = false
     /// Ordre d'empilement des pages : la dernière affichée passe devant.
     private var pageLayerOrder = 0
+    /// Sens demandé par ⇧← / ⇧→ (qui bouclent), pour que la page glisse dans le bon sens au passage du dernier au premier.
+    private var spaceStepHint: Int?
     /// Remplissages Bitwarden en attente du chargement de leur onglet (mot de passe gardé au plus 3 min).
     private var pendingFills: [UUID: PendingFill] = [:]
     private struct PendingFill {
@@ -294,9 +296,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Affiche un espace : son dernier onglet actif, ou la barre Cmd+T s'il est vide.
     func switchTo(_ space: Space, announce: Bool = true) {
+        let from = currentSpace
         currentSpace = space
         if let tab = activeBySpace[space.id] ?? tabsBySpace[space.id]?.last {
-            display(tab, announce: announce)
+            display(tab, announce: announce, from: from)
         } else {
             retireDisplayedPage()
             updateChrome(announce: false)
@@ -433,13 +436,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Les pages éveillées restent dans la fenêtre, masquées : les y remettre obligerait WebKit à tout
     /// redessiner (écran noir visible). La nouvelle page passe devant ; l'ancienne est capturée (sa carte),
     /// puis masquée. Seule la mise en veille retire une page de la fenêtre.
-    private func display(_ tab: BrowserTab, announce: Bool) {
+    /// - Parameter fromSpace: l'espace affiché juste avant (changement d'espace), pour le sens de la transition.
+    private func display(_ tab: BrowserTab, announce: Bool, from fromSpace: Space? = nil) {
         activeBySpace[tab.space.id] = tab
         tab.lastActivated = Date()
         if tab === displayedTab, let view = tab.liveWebView, view.superview === pageContainer, !view.isHidden {
             return updateChrome(announce: false)
         }
         let previous = displayedTab
+        let transition = pageTransition(from: previous, fromSpace: fromSpace, to: tab)
         displayedTab = tab
         let view = tab.webView
         if view.superview !== pageContainer {
@@ -457,22 +462,70 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         view.wantsLayer = true
         view.layer?.zPosition = CGFloat(pageLayerOrder)
         view.isHidden = false
-        hidePages(except: view)
+        let animated = animatePage(view, replacing: previous?.liveWebView, transition)
+        // L'ancienne page reste visible sous la nouvelle tant que celle-ci apparaît (sinon le fond de la fenêtre clignote).
+        hidePages(except: view, after: animated)
         if commandBar.isHidden && overview.isHidden { window?.makeFirstResponder(view) }
         host.controller.didActivateTab(tab, previousActiveTab: previous)
         updateChrome(announce: announce)
     }
 
-    /// Masque les pages autres que `kept`, après les avoir capturées.
-    private func hidePages(except kept: NSView?) {
+    /// Masque les pages autres que `kept`, après les avoir capturées (et après `delay`, durée de la transition).
+    private func hidePages(except kept: NSView?, after delay: TimeInterval = 0) {
         for other in pageContainer.subviews where other !== kept && !other.isHidden {
             let owner = allTabs.first { $0.liveWebView === other }
             Task { [weak self] in
                 await owner?.captureSnapshot(timeout: .milliseconds(400))
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
                 guard let self, other !== self.displayedTab?.liveWebView else { return }
                 other.isHidden = true
             }
         }
+    }
+
+    /// Quel mouvement pour passer de la page affichée à `tab` (voir `PageTransition`).
+    private func pageTransition(from previous: BrowserTab?, fromSpace: Space?, to tab: BrowserTab) -> PageTransition {
+        guard let origin = fromSpace ?? previous?.space,
+              let fromIndex = spaces.firstIndex(where: { $0 === origin }),
+              let toIndex = spaces.firstIndex(where: { $0 === tab.space }) else { return .none }
+        let list = tabsBySpace[tab.space.id] ?? []
+        let fromTab = origin === tab.space ? previous.flatMap { old in list.firstIndex { $0 === old } } : nil
+        return PageTransition.between(fromSpace: fromIndex, toSpace: toIndex, fromTab: fromTab,
+                                      toTab: list.firstIndex { $0 === tab } ?? 0, spaceStep: spaceStepHint)
+    }
+
+    /// Fait entrer la nouvelle page (glissement court + fondu) ; au changement d'espace, l'ancienne recule d'un demi-pas, sans s'estomper.
+    /// Avec « Réduire les animations », fondu seul. Renvoie la durée, 0 si rien n'est animé.
+    private func animatePage(_ view: NSView, replacing old: NSView?, _ transition: PageTransition) -> TimeInterval {
+        guard transition != .none, overview.isHidden, window?.isVisible == true, let layer = view.layer else { return 0 }
+        pageContainer.layoutSubtreeIfNeeded()
+        let move = Design.Motion.allowsMovement()
+        let duration: TimeInterval
+        if case .space = transition { duration = Design.Motion.duration(.slow) } else { duration = Design.Motion.duration(.medium) }
+        let entry = move ? transition.entryOffset : (0, 0)
+        layer.add(Self.pageAnimation(from: entry, to: (0, 0), opacity: (0, 1), duration: duration), forKey: "vision.page")
+        if move, let exit = transition.exitOffset, let old, old !== view, let oldLayer = old.layer {
+            // L'ancienne page reste opaque (sinon l'écran s'assombrit à mi-course) : elle recule, la nouvelle la recouvre.
+            oldLayer.add(Self.pageAnimation(from: (0, 0), to: exit, opacity: (1, 1), duration: duration), forKey: "vision.page")
+        }
+        return duration
+    }
+
+    /// Glissement et fondu d'un calque. Les décalages sont donnés à l'écran (y vers le bas) ; le conteneur des pages
+    /// n'est pas retourné, son repère a y vers le haut, d'où le signe inversé.
+    private static func pageAnimation(from: (x: CGFloat, y: CGFloat), to: (x: CGFloat, y: CGFloat),
+                                      opacity: (CGFloat, CGFloat), duration: TimeInterval) -> CAAnimation {
+        let move = CABasicAnimation(keyPath: "transform")
+        move.fromValue = CATransform3DMakeTranslation(from.x, -from.y, 0)
+        move.toValue = CATransform3DMakeTranslation(to.x, -to.y, 0)
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = opacity.0
+        fade.toValue = opacity.1
+        let group = CAAnimationGroup()
+        group.animations = [move, fade]
+        group.duration = duration
+        group.timingFunction = Design.Motion.curve
+        return group
     }
 
     private func retireDisplayedPage() {
@@ -1317,7 +1370,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func nextSpaceAction(_ sender: Any?) { stepSpace(by: 1) }
     private func stepSpace(by step: Int) {
         guard let i = spaces.firstIndex(where: { $0 === currentSpace }), spaces.count > 1 else { return }
+        spaceStepHint = step
         switchSpace(number: (i + step + spaces.count) % spaces.count + 1)
+        spaceStepHint = nil
     }
 
     private func switchSpace(number n: Int) {
