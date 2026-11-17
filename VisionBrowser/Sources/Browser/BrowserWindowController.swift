@@ -41,7 +41,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let trafficLightZone = TrafficLightZone()
     private let bottomZone = BottomEdgeZone()
     private let shelf = ShelfView()
-    private let overview = OverviewView()
+    /// Vue d'ensemble « Scène » (D3) : la page recule, rangée des onglets dessous, rail des espaces à gauche.
+    private let overview = SceneView()
+    /// Page affichée à l'ouverture de la Scène : Échap y ramène, même après avoir changé d'espace.
+    private var sceneOrigin: (space: Space, tab: BrowserTab?)?
     private let switcher = TabSwitcherView()
     private var switcherWidth: NSLayoutConstraint?
     private var switcherHeight: NSLayoutConstraint?
@@ -770,7 +773,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// d'ensemble, sauf si la page était occupée (champ en saisie, dialogue). Jamais de bip, jamais de sortie du plein écran.
     private func handleEscape() {
         if !commandBar.isHidden { return hideCommandBar() }
-        if !overview.isHidden { return closeOverview(expanding: activeTab?.id) }
+        // Même effet que dans la Scène : effacer le filtre, sinon revenir à la page d'avant.
+        if !overview.isHidden { return overview.handleEscape() }
         if !shelf.isHidden { return hideShelf() }
         guard let view = displayedTab?.liveWebView else { return showOverview() }
         Task { [weak self] in
@@ -861,20 +865,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: Vue d'ensemble
 
     private func configureOverview() {
-        overview.contentProvider = { [weak self] spaceID in self?.overviewContent(for: spaceID) ?? OverviewContent() }
+        overview.contentProvider = { [weak self] spaceID in self?.sceneContent(for: spaceID) ?? SceneContent() }
         overview.onOpenTab = { [weak self] id in
             guard let self, let tab = self.tab(id) else { return }
-            self.select(tab)
-            self.closeOverview(expanding: id)
-        }
-        overview.onCloseTab = { [weak self] id in
-            guard let self, let tab = self.tab(id) else { return }
-            self.close(tab)
-            self.overview.reload()
-        }
-        overview.onHome = { [weak self] id in
-            guard let self, let tab = self.tab(id) else { return }
-            self.goHome(tab)
             self.select(tab)
             self.closeOverview(expanding: id)
         }
@@ -883,44 +876,32 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             self.reopenArchived(id)
             self.closeOverview(expanding: id)
         }
-        overview.onOpenFavorite = { [weak self] url, spaceID in
-            guard let self else { return }
-            self.newTab(url: url, in: self.space(spaceID) ?? self.currentSpace, activate: true)
-            self.closeOverview(expanding: nil)
-        }
-        overview.onPin = { [weak self] id, pinned in
-            guard let self, let tab = self.tab(id) else { return }
-            self.setPinned(tab, pinned)
-            self.overview.reload()
-        }
         overview.onMove = { [weak self] id, spaceID in
             guard let self, let tab = self.tab(id), let target = self.space(spaceID), tab.space !== target else { return }
-            let shown = self.overview.shownSpaceID
             self.move(tab, to: target)
-            if let shown { self.overview.show(space: shown) }
             self.overview.reload()
         }
-        overview.onDismiss = { [weak self] in self?.closeOverview(expanding: self?.activeTab?.id) }
+        // Échap : retour exact à la page d'avant (espace et onglet), même après en avoir parcouru d'autres.
+        overview.onDismiss = { [weak self] in
+            guard let self else { return }
+            if let origin = self.sceneOrigin, self.spaces.contains(where: { $0 === origin.space }) {
+                if origin.space !== self.currentSpace { self.switchTo(origin.space, announce: false) }
+                if let tab = origin.tab, self.allTabs.contains(where: { $0 === tab }) { self.select(tab) }
+            }
+            self.closeOverview(expanding: self.activeTab?.id)
+        }
         overview.onShowSpace = { [weak self] id in
             guard let self, let space = self.space(id), space !== self.currentSpace else { return }
             self.switchTo(space, announce: false)
         }
     }
 
-    private func overviewContent(for spaceID: UUID) -> OverviewContent {
+    /// Contenu d'un espace pour la Scène : épinglés, onglets (ordre stable), puis archivés.
+    private func sceneContent(for spaceID: UUID) -> SceneContent {
         let list = tabsBySpace[spaceID] ?? []
-        let byID = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
-        let groups: [OverviewContent.Group] = TabOrganizer.groups(list.filter { !$0.isPinned }.map(info)).map { group in
-            switch group {
-            case .single(let info): .single(card(byID[info.id]!))
-            case .stack(let site, let infos): .stack(site: site, cards: infos.compactMap { byID[$0.id] }.map(card))
-            }
-        }
-        return OverviewContent(
-            pinned: list.filter(\.isPinned).map(card),
-            groups: groups,
-            archived: archived.filter { $0.spaceID == spaceID }.map(card),
-            favorites: (places?.favorites(limit: 60) ?? []).map { .init(title: $0.title ?? PlacesStore.host($0.url), url: $0.url) })
+        return SceneContent(pinned: list.filter(\.isPinned).map(card),
+                            tabs: list.filter { !$0.isPinned }.map(card),
+                            archived: archived.filter { $0.spaceID == spaceID }.map(card))
     }
 
     func showOverview() {
@@ -929,6 +910,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         hideShelf()
         cancelSwitcher()
         if !commandBar.isHidden { hideCommandBar() }
+        sceneOrigin = (currentSpace, activeTab)
         Task { [weak self] in
             await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
             guard let self else { return }
