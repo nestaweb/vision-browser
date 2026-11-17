@@ -35,6 +35,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: Interface
 
     private let pageContainer = NSView()
+    /// Voile posé sur la page quand la barre Cmd+T est ouverte ; un clic dessus referme la barre.
+    private let veil = VeilView()
     private let commandBar = CommandBarView()
     private let domainToast = DomainToastView()
     private let insecureStripe = PassthroughView()
@@ -113,10 +115,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         BitwardenService.shared.onChange = { [weak self] in
             guard let self else { return }
             self.onSpacesChanged?()
-            if !self.commandBar.isHidden { self.refreshResults(for: self.commandBar.query, keepSelection: true) }
+            if self.commandBar.isOpen { self.refreshResults(for: self.commandBar.query, keepSelection: true) }
         }
         ClipboardMonitor.shared.onChange = { [weak self] in
-            guard let self, !self.commandBar.isHidden else { return }
+            guard let self, self.commandBar.isOpen else { return }
             self.refreshResults(for: self.commandBar.query, keepSelection: true)
         }
         host.controller.didOpenWindow(self)
@@ -156,7 +158,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         insecureStripe.layer?.backgroundColor = NSColor.systemRed.cgColor
         insecureStripe.isHidden = true
 
-        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, shelf, overview, switcher, domainToast, commandBar,
+        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, shelf, overview, switcher, domainToast, veil, commandBar,
                      trafficLightZone, popupAnchor] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -204,14 +206,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             domainToast.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
             domainToast.centerXAnchor.constraint(equalTo: content.centerXAnchor),
 
-            commandBar.topAnchor.constraint(equalTo: content.topAnchor, constant: 90),
+            // Au quart de la hauteur : la liste a la place de se dérouler dessous.
+            NSLayoutConstraint(item: commandBar, attribute: .top, relatedBy: .equal, toItem: content, attribute: .bottom, multiplier: 0.24, constant: 0),
             commandBar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            veil.topAnchor.constraint(equalTo: content.topAnchor),
+            veil.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            veil.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            veil.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             // La proportion est une simple préférence, sous la priorité de taille de la fenêtre (500).
             // Plus forte, elle bornait la fenêtre à 1200 pt (0,5 × largeur + 160 ≤ 760) : AppKit en déduit
             // `maxFullScreenContentSize`, d'où des bandes noires en plein écran.
             commandBar.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.5, constant: 160)
                 .withPriority(NSLayoutConstraint.Priority(480)),
-            commandBar.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
+            commandBar.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
 
             trafficLightZone.topAnchor.constraint(equalTo: content.topAnchor),
             trafficLightZone.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -228,10 +235,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         trafficLightZone.onHover = { [weak self] inside in self?.setTrafficLightsVisible(inside) }
         setTrafficLightsVisible(false)
 
-        commandBar.isHidden = true
         commandBar.onQueryChange = { [weak self] query in self?.refreshResults(for: query) }
         commandBar.onExecute = { [weak self] result, typed, mode in self?.execute(result, typed: typed, mode: mode) }
         commandBar.onCancel = { [weak self] in self?.hideCommandBar() }
+        veil.onClick = { [weak self] in self?.hideCommandBar() }
         commandBar.onStepSpace = { [weak self] step in
             // La barre se referme ; elle se rouvre d'elle-même si l'espace d'arrivée est vide.
             self?.hideCommandBar()
@@ -468,7 +475,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let animated = animatePage(view, replacing: previous?.liveWebView, transition)
         // L'ancienne page reste visible sous la nouvelle tant que celle-ci apparaît (sinon le fond de la fenêtre clignote).
         hidePages(except: view, after: animated)
-        if commandBar.isHidden && overview.isHidden { window?.makeFirstResponder(view) }
+        if !commandBar.isOpen && overview.isHidden { window?.makeFirstResponder(view) }
         host.controller.didActivateTab(tab, previousActiveTab: previous)
         updateChrome(announce: announce)
     }
@@ -721,7 +728,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         if !switcherTabs.isEmpty && event.keyCode == 53 { cancelSwitcher(); return true }
         guard event.keyCode == 48, event.modifierFlags.contains(.control) else { return false }
-        guard overview.isHidden, commandBar.isHidden else { return true }
+        guard overview.isHidden, !commandBar.isOpen else { return true }
         let step = event.modifierFlags.contains(.shift) ? -1 : 1
         if switcherTabs.isEmpty {
             let order = TabOrganizer.recentFirst(tabs.map(info)).compactMap { info in tabs.first { $0.id == info.id } }
@@ -772,7 +779,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Échap, quand ni la page ni un champ ne s'en est servi : ferme la surcouche ouverte, sinon ouvre la vue
     /// d'ensemble, sauf si la page était occupée (champ en saisie, dialogue). Jamais de bip, jamais de sortie du plein écran.
     private func handleEscape() {
-        if !commandBar.isHidden { return hideCommandBar() }
+        if commandBar.isOpen { return hideCommandBar() }
         // Même effet que dans la Scène : effacer le filtre, sinon revenir à la page d'avant.
         if !overview.isHidden { return overview.handleEscape() }
         if !shelf.isHidden { return hideShelf() }
@@ -829,10 +836,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func showShelf() {
-        guard shelf.isHidden, overview.isHidden, commandBar.isHidden, switcherTabs.isEmpty, window?.isKeyWindow == true else { return }
+        guard shelf.isHidden, overview.isHidden, !commandBar.isOpen, switcherTabs.isEmpty, window?.isKeyWindow == true else { return }
         Task { [weak self] in
             await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
-            guard let self, self.overview.isHidden, self.commandBar.isHidden else { return }
+            guard let self, self.overview.isHidden, !self.commandBar.isOpen else { return }
             self.refreshShelf()
             self.shelf.isHidden = false
             NSAnimationContext.runAnimationGroup({ context in
@@ -909,7 +916,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         overviewOpening = true
         hideShelf()
         cancelSwitcher()
-        if !commandBar.isHidden { hideCommandBar() }
+        if commandBar.isOpen { hideCommandBar() }
         sceneOrigin = (currentSpace, activeTab)
         Task { [weak self] in
             await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
@@ -953,15 +960,41 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if !overview.isHidden { overview.isHidden = true }
         // L'état de la CLI a pu changer (bw login fait dans le Terminal) : vérifié en arrière-plan.
         if !BitwardenService.shared.isUnlocked { Task { await BitwardenService.shared.refreshStatus() } }
-        commandBar.present(text: newTab ? "" : (activeTab?.url?.absoluteString ?? ""), newTab: newTab)
+        let opening = !commandBar.isOpen
+        commandBar.present(text: newTab ? "" : (activeTab?.url?.absoluteString ?? ""), newTab: newTab, spaceName: currentSpace.name)
         window?.makeFirstResponder(commandBar.field)
         refreshResults(for: commandBar.query)
+        if opening { setBarBackdrop(visible: true) }
     }
 
     private func hideCommandBar() {
         suggestionTask?.cancel()
-        commandBar.isHidden = true
+        guard commandBar.isOpen else { return }
+        commandBar.dismiss()
+        setBarBackdrop(visible: false)
         if let webView = displayedTab?.liveWebView { window?.makeFirstResponder(webView) }
+    }
+
+    /// Derrière la barre : la page recule d'un pas (98,5 %) et un voile uni se pose dessus.
+    private func setBarBackdrop(visible: Bool) {
+        if visible { veil.isHidden = false; veil.alphaValue = 0 }
+        Design.Motion.animate(.medium, { self.veil.animator().alphaValue = visible ? 1 : 0 }) { [weak self] in
+            guard let self, !visible, !self.commandBar.isOpen else { return }
+            self.veil.isHidden = true
+        }
+        guard Design.Motion.allowsMovement(), let layer = pageContainer.layer else { return }
+        let scale: CGFloat = 0.985, size = pageContainer.bounds.size
+        let receded = CATransform3DConcat(CATransform3DMakeScale(scale, scale, 1),
+                                          CATransform3DMakeTranslation(size.width * (1 - scale) / 2, size.height * (1 - scale) / 2, 0))
+        let animation = CABasicAnimation(keyPath: "transform")
+        animation.fromValue = layer.presentation()?.transform ?? (visible ? CATransform3DIdentity : receded)
+        animation.toValue = visible ? receded : CATransform3DIdentity
+        animation.duration = Design.Motion.duration(.slow)
+        animation.timingFunction = Design.Motion.curve
+        // Le recul n'existe que dans l'animation (la vue garde son cadre) : il reste tant que la barre est ouverte.
+        animation.fillMode = .forwards
+        animation.isRemovedOnCompletion = !visible
+        layer.add(animation, forKey: "vision.recede")
     }
 
     private var openTabInfos: [OpenTabInfo] {
@@ -989,7 +1022,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
             let suggestions = await SearchSuggestions.fetch(query)
-            guard !Task.isCancelled, let self, !self.commandBar.isHidden, self.commandBar.query == query else { return }
+            guard !Task.isCancelled, let self, self.commandBar.isOpen, self.commandBar.query == query else { return }
             self.commandBar.show(results: self.localResults(for: query, suggestions: suggestions), keepSelection: true)
         }
     }
@@ -1284,7 +1317,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         overview.isHidden ? showOverview() : closeOverview(expanding: activeTab?.id)
     }
     @objc func closeTabAction(_ sender: Any?) {
-        if !commandBar.isHidden { return hideCommandBar() }
+        if commandBar.isOpen { return hideCommandBar() }
         if !overview.isHidden {
             if let tab = targetTab { close(tab); overview.reload() }
             return
@@ -1426,6 +1459,20 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         window?.makeKeyAndOrderFront(nil)
         completionHandler(nil)
     }
+}
+
+/// Voile uni posé sur la page derrière la barre Cmd+T (couleur de `Design.Palette.veil`).
+@MainActor
+final class VeilView: NSView {
+    var onClick: (() -> Void)?
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = Design.Palette.veil.cgColor
+        isHidden = true
+    }
+    required init?(coder: NSCoder) { fatalError("non utilisé") }
+    override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
 private extension NSLayoutConstraint {
