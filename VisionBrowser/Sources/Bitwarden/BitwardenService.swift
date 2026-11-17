@@ -68,7 +68,8 @@ final class BitwardenService {
 
     private(set) var status: BitwardenStatus = .notInstalled
     private(set) var vault = BitwardenVault()
-    private(set) var isBusy = false
+    /// Déverrouillage en cours (environ 10 s : la CLI dérive la clé du coffre, c'est volontairement lent).
+    private(set) var isBusy = false { didSet { if isBusy != oldValue { onChange?() } } }
     let isDemo: Bool
     private let cli: BitwardenCLI?
     private var session: String?
@@ -90,21 +91,40 @@ final class BitwardenService {
     func refreshStatus() async {
         guard !isDemo else { return }
         guard let cli else { return update(.notInstalled) }
-        let data = try? await cli.run(["status"], session: session)
-        update(data.map(BitwardenJSON.status) ?? .unauthenticated)
+        // Pendant un déverrouillage, l'état « verrouillé » renvoyé par bw serait déjà faux à l'arrivée.
+        guard !isBusy else { return }
+        let started = session
+        do {
+            let status = BitwardenJSON.status(try await cli.run(["status"], session: started))
+            // Réponse obsolète si la session a changé entre-temps (déverrouillage ou verrouillage).
+            guard session == started, !isBusy else { return }
+            update(status)
+        } catch {
+            Self.log("statut illisible : \(error.localizedDescription)")
+            update(.unauthenticated)
+        }
     }
 
     /// Déverrouille avec le mot de passe maître (passé à `bw` par variable d'environnement), puis charge la liste.
     func unlock(password: String) async throws {
         guard !isDemo else { return }
         guard let cli else { throw BitwardenCLI.Failure.command("La CLI Bitwarden (bw) est introuvable.") }
+        // Un second déverrouillage annulerait le premier (chaque `bw unlock` invalide la session précédente).
+        guard !isBusy else { return Self.log("déverrouillage déjà en cours : demande ignorée") }
         isBusy = true
         defer { isBusy = false }
-        let data = try await cli.run(["unlock", "--passwordenv", "VB_BW_PASSWORD", "--raw"], environment: ["VB_BW_PASSWORD": password])
+        Self.log("déverrouillage demandé")
+        let data: Data
+        do {
+            data = try await cli.run(["unlock", "--passwordenv", "VB_BW_PASSWORD", "--raw"], environment: ["VB_BW_PASSWORD": password])
+        } catch {
+            Self.log("déverrouillage refusé : \(error.localizedDescription)")
+            throw error
+        }
         let key = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw BitwardenCLI.Failure.command("Bitwarden n'a pas renvoyé de clé de session.") }
         session = key
-        try await load()
+        try await load(force: true)
         // Synchronisation avec le serveur en arrière-plan, puis rechargement.
         Task { [weak self] in
             guard let self, let session = self.session else { return }
@@ -113,12 +133,29 @@ final class BitwardenService {
         }
     }
 
-    func load() async throws {
+    /// - Parameter force: juste après un déverrouillage, l'état est connu : pas besoin de redemander à bw.
+    func load(force: Bool = false) async throws {
         guard !isDemo, let cli, let session else { return }
-        async let items = cli.run(["list", "items"], session: session)
-        async let folders = cli.run(["list", "folders"], session: session)
-        vault = BitwardenVault(items: try BitwardenJSON.items(try await items), folders: try BitwardenJSON.folders(try await folders))
-        await refreshStatus()
+        let loaded: BitwardenVault
+        do {
+            async let items = cli.run(["list", "items"], session: session)
+            async let folders = cli.run(["list", "folders"], session: session)
+            loaded = BitwardenVault(items: try BitwardenJSON.items(try await items), folders: try BitwardenJSON.folders(try await folders))
+        } catch {
+            guard self.session == session else { return Self.log("lecture abandonnée : session remplacée") }
+            Self.log("lecture du coffre impossible : \(error)")
+            throw error
+        }
+        // Une lecture faite avec une ancienne session (verrouillage, nouveau déverrouillage) est ignorée.
+        guard self.session == session else { return Self.log("lecture ignorée : session remplacée") }
+        vault = loaded
+        if force {
+            let email: String? = if case .locked(let email) = status { email } else { nil }
+            update(.unlocked(email: email))
+        } else {
+            await refreshStatus()
+        }
+        Self.log("coffre chargé : \(vault.items.count) identifiants, \(vault.folders.count) dossiers")
         onChange?()
     }
 
@@ -129,8 +166,8 @@ final class BitwardenService {
         session = nil
         vault = BitwardenVault()
         lastAuthentication = nil
-        if case .unlocked(let email) = status { status = .locked(email: email) }
-        onChange?()
+        Self.log("verrouillé à la demande")
+        if case .unlocked(let email) = status { update(.locked(email: email)) } else { onChange?() }
         if hadSession, let cli { Task { _ = try? await cli.run(["lock"]) } }
     }
 
@@ -168,11 +205,24 @@ final class BitwardenService {
         return true
     }
 
+    /// Journal de diagnostic : état et nombres seulement, jamais de contenu du coffre ni de mot de passe.
+    static func log(_ message: String) { NSLog("Vision Browser · Bitwarden CLI : \(message)") }
+
     private func update(_ newStatus: BitwardenStatus) {
+        if newStatus != status { Self.log("statut \(Self.describe(status)) → \(Self.describe(newStatus))") }
         if newStatus == .unauthenticated || newStatus == .notInstalled { session = nil; vault = BitwardenVault() }
         guard newStatus != status else { return }
         status = newStatus
         onChange?()
+    }
+
+    private static func describe(_ status: BitwardenStatus) -> String {
+        switch status {
+        case .notInstalled: "CLI introuvable"
+        case .unauthenticated: "non connecté"
+        case .locked: "verrouillé"
+        case .unlocked: "déverrouillé"
+        }
     }
 
     // MARK: Mode démo (`-VBBitwardenDemo YES`) : comptes fictifs et page de connexion locale

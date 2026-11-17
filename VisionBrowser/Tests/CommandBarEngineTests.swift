@@ -184,6 +184,20 @@ final class CommandBarEngineTests: XCTestCase {
         XCTAssertFalse(try kinds(ctx).contains { if case .command = $0 { true } else { false } })
     }
 
+    func testLockedVaultIsSignalledWhenSearching() throws {
+        var ctx = context
+        ctx.bitwarden = .locked(email: nil)
+        let results = try engine().results(for: "zoho", tabs: [], context: ctx)
+        XCTAssertEqual(results.filter { $0.kind == .command(.unlockBitwarden) }.map(\.title), ["Déverrouiller Bitwarden pour chercher « zoho »"])
+        XCTAssertEqual(results.first?.kind, .search, "la recherche web reste devant")
+        ctx.bitwardenBusy = true
+        let busy = try engine().results(for: "zoho", tabs: [], context: ctx)
+        XCTAssertEqual(busy.first?.title, "Bitwarden se déverrouille… (quelques secondes)", "pendant le déverrouillage, on l'annonce en tête")
+        ctx.bitwardenBusy = false
+        ctx.bitwarden = .unlocked(email: nil)
+        XCTAssertFalse(try engine().results(for: "zoho", tabs: [], context: ctx).contains { $0.kind == .command(.unlockBitwarden) })
+    }
+
     func testSuggestionParsing() {
         XCTAssertEqual(SearchSuggestions.parse(Data(#"["swi",["swift","swiftui"]]"#.utf8)), ["swift", "swiftui"])
         XCTAssertEqual(SearchSuggestions.parse(Data("{}".utf8)), [])

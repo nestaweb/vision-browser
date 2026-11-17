@@ -79,6 +79,8 @@ struct CommandBarEngine {
         var routedSpaceForActiveHost: UUID?
         /// État de la CLI Bitwarden (commandes Déverrouiller / Verrouiller).
         var bitwarden: BitwardenStatus = .notInstalled
+        /// Déverrouillage en cours : on l'indique au lieu de proposer de recommencer.
+        var bitwardenBusy = false
     }
 
     static let maxResults = 9
@@ -153,6 +155,16 @@ struct CommandBarEngine {
                                  score: 65 + (nameMatch ? 40 : 0) - Double(index)))
         }
 
+        // Coffre verrouillé : on le signale dès qu'on cherche, sinon rien n'indique que des comptes sont cachés.
+        if case .locked = context.bitwarden, query.count >= 3, !ClipboardHistory.wantsEverything(tokens),
+           !results.contains(where: { $0.kind == .command(.unlockBitwarden) }) {
+            results.append(.init(kind: .command(.unlockBitwarden),
+                                 title: context.bitwardenBusy ? "Bitwarden se déverrouille… (quelques secondes)"
+                                                              : "Déverrouiller Bitwarden pour chercher « \(query) »",
+                                 subtitle: context.bitwardenBusy ? "Les comptes apparaîtront ici" : "Bitwarden verrouillé",
+                                 url: nil, score: context.bitwardenBusy ? 90 : 25))
+        }
+
         // Presse-papier : sous les onglets ouverts ; en tête si l'on tape « presse-papier », « copie »…
         let wantsClipboard = ClipboardHistory.wantsEverything(tokens)
         for (index, item) in clipboard.search(query).enumerated() {
@@ -204,7 +216,9 @@ struct CommandBarEngine {
             (.newSpace, "Nouvel espace", "nouvel nouveau espace creer"),
         ]
         switch context.bitwarden {
-        case .locked: catalog.append((.unlockBitwarden, "Déverrouiller Bitwarden (recherche dans Cmd+T)", "bitwarden deverrouiller coffre mot passe identifiant"))
+        case .locked: catalog.append((.unlockBitwarden, context.bitwardenBusy ? "Bitwarden se déverrouille… (quelques secondes)"
+                                                                               : "Déverrouiller Bitwarden (recherche dans Cmd+T)",
+                                      "bitwarden deverrouiller coffre mot passe identifiant"))
         case .unlocked: catalog.append((.lockBitwarden, "Verrouiller Bitwarden", "bitwarden verrouiller coffre"))
         case .unauthenticated: catalog.append((.setupBitwarden, "Bitwarden : connecter la CLI (bw login)", "bitwarden connecter cli coffre deverrouiller"))
         case .notInstalled: break

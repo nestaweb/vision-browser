@@ -69,7 +69,9 @@ final class DomainToastView: NSVisualEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     /// - Parameter space: nom et couleur de l'espace à rappeler (deux comptes Zoho se ressemblent).
-    func show(text: String, symbol: String, tint: NSColor, space: (name: String, color: NSColor)? = nil) {
+    /// - Parameter duration: durée d'affichage ; un message d'attente reste jusqu'au message suivant.
+    func show(text: String, symbol: String, tint: NSColor, space: (name: String, color: NSColor)? = nil,
+              duration: Duration = .milliseconds(1500)) {
         label.stringValue = text
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.contentTintColor = tint
@@ -84,7 +86,7 @@ final class DomainToastView: NSVisualEffectView {
         }
         hideTask?.cancel()
         hideTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(1500))
+            try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self else { return }
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.4

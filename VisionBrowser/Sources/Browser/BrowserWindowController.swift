@@ -895,7 +895,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
                      spaces: spaces.map { .init(id: $0.id, name: $0.name) },
                      currentSpaceID: currentSpace.id,
                      routedSpaceForActiveHost: url.flatMap { config.spaceID(for: $0) },
-                     bitwarden: BitwardenService.shared.status)
+                     bitwarden: BitwardenService.shared.status,
+                     bitwardenBusy: BitwardenService.shared.isBusy)
     }
 
     /// Résultats locaux immédiatement, puis suggestions du moteur de recherche dès qu'elles arrivent.
@@ -1050,6 +1051,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func unlockBitwardenAction(_ sender: Any?) {
         let service = BitwardenService.shared
         if service.isDemo || service.isUnlocked { return }
+        if service.isBusy {
+            return domainToast.show(text: "Bitwarden se déverrouille… (quelques secondes)", symbol: "hourglass", tint: .systemBlue)
+        }
         guard case .locked(let email) = service.status else { return showBitwardenSetup() }
         guard let window else { return }
         let alert = NSAlert()
@@ -1066,13 +1070,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             guard response == .alertFirstButtonReturn else { return }
             let password = field.stringValue
             field.stringValue = ""
-            self?.domainToast.show(text: "Déverrouillage de Bitwarden…", symbol: "lock.open.fill", tint: .systemBlue)
+            // Reste affiché jusqu'au résultat : la CLI met une dizaine de secondes à dériver la clé du coffre.
+            self?.domainToast.show(text: "Déverrouillage de Bitwarden… (environ 10 s)", symbol: "hourglass", tint: .systemBlue,
+                                   duration: .seconds(60))
             Task { [weak self] in
                 do {
                     try await service.unlock(password: password)
                     self?.domainToast.show(text: "Bitwarden déverrouillé · \(service.vault.items.count) identifiants",
                                            symbol: "lock.open.fill", tint: .systemBlue)
                 } catch {
+                    self?.domainToast.show(text: "Bitwarden toujours verrouillé", symbol: "lock.fill", tint: .systemRed)
                     self?.showError("Bitwarden n'a pas pu être déverrouillé", error)
                 }
             }
