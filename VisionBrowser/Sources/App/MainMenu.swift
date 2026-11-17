@@ -52,6 +52,7 @@ enum MainMenu {
             item("Nouvel onglet", #selector(BrowserWindowController.newTabAction(_:)), "t"),
             item("Modifier l'adresse…", #selector(BrowserWindowController.editAddressAction(_:)), "l"),
             item("Rouvrir l'onglet fermé", #selector(BrowserWindowController.reopenClosedTabAction(_:)), "t", [.command, .shift]),
+            item("Épingler l'onglet", #selector(BrowserWindowController.togglePinAction(_:)), "d"),
             item("Ajouter aux favoris / Retirer", #selector(BrowserWindowController.toggleFavoriteAction(_:)), "d", [.command, .shift]),
             .separator(),
             item("Fermer l'onglet", #selector(BrowserWindowController.closeTabAction(_:)), "w"),
@@ -70,6 +71,8 @@ enum MainMenu {
 
         main.addItem(submenu("Présentation", [
             item("Recharger la page", #selector(BrowserWindowController.reloadAction(_:)), "r"),
+            .separator(),
+            item("Vue d'ensemble des onglets", #selector(BrowserWindowController.showOverviewAction(_:)), "\\", [.command, .shift]),
             .separator(),
             item("Zoom avant", #selector(BrowserWindowController.zoomInAction(_:)), "+"),
             item("Zoom arrière", #selector(BrowserWindowController.zoomOutAction(_:)), "-"),

@@ -4,6 +4,8 @@ import Foundation
 struct CommandResult: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case openTab(id: UUID, space: String)
+        /// Onglet rangé automatiquement : le rouvrir dans son espace.
+        case archived(id: UUID, space: String)
         case favorite
         case history
         case address
@@ -33,6 +35,7 @@ struct CommandResult: Equatable, Sendable {
     var actionLabel: String {
         switch kind {
         case .openTab: "Basculer"
+        case .archived: "Rouvrir"
         case .favorite, .history, .address: "Ouvrir"
         case .search, .suggestion: "Rechercher"
         case .command: "Exécuter"
@@ -68,7 +71,8 @@ struct CommandBarEngine {
 
     static let maxResults = 9
 
-    func results(for rawQuery: String, tabs: [OpenTabInfo], context: Context, suggestions: [String] = []) -> [CommandResult] {
+    func results(for rawQuery: String, tabs: [OpenTabInfo], context: Context, suggestions: [String] = [],
+                 archived: [ArchivedTab] = []) -> [CommandResult] {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty { return emptyQueryResults(tabs: tabs) }
 
@@ -94,22 +98,40 @@ struct CommandBarEngine {
                                  subtitle: host, url: tab.url, score: 70 + hostBonus))
         }
 
-        // 3. Favoris et historique (une adresse déjà ouverte en onglet n'est pas répétée).
+        // Une même page peut avoir plusieurs adresses (paramètres ajoutés après chargement, ex. `&ia=web`,
+        // ou redirection) : on n'en garde qu'une par couple site + titre, la mieux placée.
+        let pageKey = { (url: URL?, title: String?) in
+            "\(PlacesStore.host(url ?? URL(string: "about:blank")!))|\(Self.normalize(title ?? url?.absoluteString ?? ""))"
+        }
+        var seenPages = Set(tabs.map { pageKey($0.url, $0.title) })
+
+        // 3. Onglets archivés : sous les onglets ouverts, devant l'historique (on sait qu'on les avait gardés).
         let openKeys = Set(tabs.compactMap { $0.url.map(PlacesStore.key) })
-        // Une même page peut avoir plusieurs adresses (paramètres ajoutés après chargement, ex. `&ia=web`) :
-        // on n'en garde qu'une par couple site + titre, la mieux classée.
-        var seenPages = Set(tabs.map { "\(PlacesStore.host($0.url ?? URL(string: "about:blank")!))|\(Self.normalize($0.title ?? ""))" })
-        for place in places?.search(query, limit: 8) ?? [] where !openKeys.contains(PlacesStore.key(place.url)) {
+        var archivedKeys = Set<String>()
+        for entry in archived where !openKeys.contains(PlacesStore.key(entry.url)) {
+            let haystack = Self.normalize("\(entry.title ?? "") \(entry.url.absoluteString)")
+            guard !tokens.isEmpty, tokens.allSatisfy({ haystack.contains($0) }),
+                  archivedKeys.insert(PlacesStore.key(entry.url)).inserted,
+                  seenPages.insert(pageKey(entry.url, entry.title)).inserted else { continue }
+            let host = PlacesStore.host(entry.url)
+            let space = context.spaces.first { $0.id == entry.spaceID }?.name ?? ""
+            results.append(.init(kind: .archived(id: entry.id, space: space), title: entry.title?.nonEmpty ?? host,
+                                 subtitle: host, url: entry.url, score: 45 + (host.hasPrefix(tokens[0]) ? 40 : 0)))
+        }
+
+        // 4. Favoris et historique (une page déjà ouverte ou archivée n'est pas répétée).
+        let shownKeys = openKeys.union(archivedKeys)
+        for place in places?.search(query, limit: 8) ?? [] where !shownKeys.contains(PlacesStore.key(place.url)) {
             let host = PlacesStore.host(place.url)
-            guard seenPages.insert("\(host)|\(Self.normalize(place.title ?? place.url.absoluteString))").inserted else { continue }
+            guard seenPages.insert(pageKey(place.url, place.title)).inserted else { continue }
             results.append(.init(kind: place.isFavorite ? .favorite : .history, title: place.title?.nonEmpty ?? host,
                                  subtitle: host, url: place.url, isFavorite: place.isFavorite, score: place.score))
         }
 
-        // 4. Commandes : proposées quand un mot de leur nom commence par ce qu'on tape.
+        // 5. Commandes : proposées quand un mot de leur nom commence par ce qu'on tape.
         results += commands(matching: tokens, context: context)
 
-        // 5. Suggestions du moteur de recherche (arrivent plus tard, ne passent jamais devant).
+        // 6. Suggestions du moteur de recherche (arrivent plus tard, ne passent jamais devant).
         let seen = Set(results.map { Self.normalize($0.title) })
         for (index, text) in suggestions.prefix(4).enumerated() where !seen.contains(Self.normalize(text)) {
             guard case .search(_, let url) = AddressInput.parse(text) else { continue }

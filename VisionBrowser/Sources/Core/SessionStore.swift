@@ -2,9 +2,29 @@ import Foundation
 
 /// Instantané des onglets ouverts, rangés par espace, pour les rouvrir au lancement suivant.
 struct SessionSnapshot: Codable, Equatable, Sendable {
+    /// Un onglet. Les champs ajoutés en v3 ont une valeur par défaut : une session v2 se relit telle quelle.
     struct TabRecord: Codable, Equatable, Sendable {
+        var id = UUID()
         var url: URL
         var title: String?
+        var pinned = false
+        /// Page d'accueil d'un onglet épinglé (bouton ↺).
+        var homeURL: URL?
+        var lastActivated: Date?
+
+        init(id: UUID = UUID(), url: URL, title: String?, pinned: Bool = false, homeURL: URL? = nil, lastActivated: Date? = nil) {
+            self.id = id; self.url = url; self.title = title; self.pinned = pinned; self.homeURL = homeURL; self.lastActivated = lastActivated
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            url = try c.decode(URL.self, forKey: .url)
+            title = try c.decodeIfPresent(String.self, forKey: .title)
+            pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+            homeURL = try c.decodeIfPresent(URL.self, forKey: .homeURL)
+            lastActivated = try c.decodeIfPresent(Date.self, forKey: .lastActivated)
+        }
     }
 
     struct SpaceTabs: Codable, Equatable, Sendable {
@@ -13,13 +33,39 @@ struct SessionSnapshot: Codable, Equatable, Sendable {
         var activeIndex: Int
     }
 
-    var version = 2
+    var version = 3
     var spaces: [SpaceTabs]
     var activeSpaceID: UUID?
+    /// Onglets rangés automatiquement (F2), retrouvables dans Cmd+T et la vue d'ensemble.
+    var archived: [ArchivedTab] = []
 
     static let empty = SessionSnapshot(spaces: [], activeSpaceID: nil)
 
+    init(spaces: [SpaceTabs], activeSpaceID: UUID?, archived: [ArchivedTab] = []) {
+        self.spaces = spaces; self.activeSpaceID = activeSpaceID; self.archived = archived
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 2
+        spaces = try c.decode([SpaceTabs].self, forKey: .spaces)
+        activeSpaceID = try c.decodeIfPresent(UUID.self, forKey: .activeSpaceID)
+        archived = try c.decodeIfPresent([ArchivedTab].self, forKey: .archived) ?? []
+    }
+
     func tabs(in spaceID: UUID) -> SpaceTabs? { spaces.first { $0.spaceID == spaceID } }
+}
+
+/// Un onglet archivé : assez pour le retrouver et le rouvrir dans son espace.
+struct ArchivedTab: Codable, Equatable, Sendable {
+    var id: UUID
+    var url: URL
+    var title: String?
+    var spaceID: UUID
+    var archivedAt: Date
+
+    /// On garde les 200 plus récents : au-delà, l'historique (Cmd+T) suffit.
+    static let limit = 200
 }
 
 /// Lecture et écriture de la session sur disque (JSON).
@@ -60,6 +106,9 @@ struct SessionStore: Sendable {
             space.activeIndex = space.tabs.isEmpty ? 0 : min(max(space.activeIndex, 0), space.tabs.count - 1)
             return space
         }
+        snapshot.archived = Array(snapshot.archived.filter { ["http", "https"].contains($0.url.scheme?.lowercased() ?? "") }
+            .sorted { $0.archivedAt > $1.archivedAt }.prefix(ArchivedTab.limit))
+        snapshot.version = 3
         return snapshot
     }
 

@@ -244,20 +244,25 @@ private final class ResultCellView: NSTableCellView {
         let (symbol, color) = Self.style(for: result.kind)
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         badge.layer?.backgroundColor = color.cgColor
-        if case .openTab(_, let space) = result.kind {
-            pill.stringValue = "  Ouvert · \(space)  "
-            pill.textColor = .systemGreen
-            pill.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.15).cgColor
-            pill.isHidden = false
-        } else {
-            pill.isHidden = true
+        switch result.kind {
+        case .openTab(_, let space): showPill("Ouvert · \(space)", color: .systemGreen)
+        case .archived(_, let space): showPill(space.isEmpty ? "Archivé" : "Archivé · \(space)", color: .systemBrown)
+        default: pill.isHidden = true
         }
+    }
+
+    private func showPill(_ text: String, color: NSColor) {
+        pill.stringValue = "  \(text)  "
+        pill.textColor = color
+        pill.layer?.backgroundColor = color.withAlphaComponent(0.15).cgColor
+        pill.isHidden = false
     }
 
     /// Repères visuels définis en F4.
     static func style(for kind: CommandResult.Kind) -> (String, NSColor) {
         switch kind {
         case .openTab: ("square.on.square", .systemGreen)
+        case .archived: ("archivebox.fill", .systemBrown)
         case .favorite: ("star.fill", .systemYellow)
         case .history: ("clock", .systemGray)
         case .address: ("globe", .systemBlue)

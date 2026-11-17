@@ -111,6 +111,30 @@ final class CommandBarEngineTests: XCTestCase {
         XCTAssertTrue(results.contains { $0.kind == .command(.newSpace) }, "créer un espace n'a pas besoin de page ouverte")
     }
 
+    func testArchivedTabIsOfferedOnceAboveHistory() throws {
+        let url = URL(string: "https://books.zoho.eu/factures")!
+        let e = try engine { $0.recordVisit(url: url, title: "Factures") }
+        let proB = UUID()
+        var ctx = context
+        ctx.spaces = [.init(id: proB, name: "Pro B")]
+        let entry = ArchivedTab(id: UUID(), url: url, title: "Factures", spaceID: proB, archivedAt: now)
+        let results = e.results(for: "factures", tabs: [], context: ctx, archived: [entry])
+        let pages = results.filter { $0.url == url }
+        XCTAssertEqual(pages.count, 1, "archivé et historique ne font qu'un résultat")
+        XCTAssertEqual(pages.first?.kind, .archived(id: entry.id, space: "Pro B"))
+        XCTAssertEqual(pages.first?.actionLabel, "Rouvrir")
+    }
+
+    /// Wikipédia redirige `Swift_(langage)` vers `Swift#Informatique` : même page, une seule ligne.
+    func testArchivedPageHidesHistoryOfRedirectedAddress() throws {
+        let e = try engine { $0.recordVisit(url: URL(string: "https://fr.wikipedia.org/wiki/Swift_(langage)")!, title: "Swift — Wikipédia") }
+        let entry = ArchivedTab(id: UUID(), url: URL(string: "https://fr.wikipedia.org/wiki/Swift#Informatique")!,
+                                title: "Swift — Wikipédia", spaceID: UUID(), archivedAt: now)
+        let pages = e.results(for: "wiki", tabs: [], context: context, archived: [entry]).filter { $0.title == "Swift — Wikipédia" }
+        XCTAssertEqual(pages.count, 1)
+        if case .archived = pages.first?.kind {} else { XCTFail("la version archivée est gardée") }
+    }
+
     func testSuggestionParsing() {
         XCTAssertEqual(SearchSuggestions.parse(Data(#"["swi",["swift","swiftui"]]"#.utf8)), ["swift", "swiftui"])
         XCTAssertEqual(SearchSuggestions.parse(Data("{}".utf8)), [])

@@ -26,6 +26,32 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.tabs(in: perso)?.activeIndex, 1)
     }
 
+    /// Session de la phase 3 (v2) : relue sans perte, avec les valeurs par défaut des champs v3.
+    func testPhaseThreeSessionIsRead() {
+        let v2 = Data("""
+        {"version": 2, "activeSpaceID": "\(perso.uuidString)",
+         "spaces": [{"spaceID": "\(perso.uuidString)", "activeIndex": 0, "tabs": [{"url": "https://crm.zoho.eu", "title": "CRM"}]}]}
+        """.utf8)
+        let snapshot = SessionStore.decode(v2)
+        XCTAssertEqual(snapshot.version, 3)
+        let tab = snapshot.tabs(in: perso)?.tabs.first
+        XCTAssertEqual(tab?.url.host, "crm.zoho.eu")
+        XCTAssertEqual(tab?.pinned, false)
+        XCTAssertNil(tab?.lastActivated)
+        XCTAssertEqual(snapshot.archived, [])
+    }
+
+    func testPinnedAndArchivedRoundTrip() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = SessionSnapshot(spaces: [.init(spaceID: perso, tabs: [
+            .init(url: URL(string: "https://mail.zoho.eu/inbox")!, title: "Mail", pinned: true,
+                  homeURL: URL(string: "https://mail.zoho.eu")!, lastActivated: date),
+        ], activeIndex: 0)], activeSpaceID: perso, archived: [
+            .init(id: UUID(), url: URL(string: "https://old.example.com")!, title: "Vieux", spaceID: perso, archivedAt: date),
+        ])
+        XCTAssertEqual(SessionStore.decode(try SessionStore.encode(snapshot)), snapshot)
+    }
+
     func testCorruptDataGivesEmptySession() {
         XCTAssertEqual(SessionStore.decode(Data("pas du json".utf8)), .empty)
     }

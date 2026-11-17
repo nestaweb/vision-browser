@@ -1,8 +1,8 @@
 import WebKit
 
 /// La fenêtre de navigation : la page occupe toute la fenêtre (F1), aucune interface permanente.
-/// Gère les espaces (F5) et leurs onglets, les surcouches (barre Cmd+T, indicateur de domaine)
-/// et expose la fenêtre à l'extension (`WKWebExtensionWindow`).
+/// Gère les espaces (F5) et leurs onglets, la navigation entre onglets (F2 : Ctrl+Tab, étagère, vue d'ensemble,
+/// veille, archivage), les surcouches (barre Cmd+T, indicateur de domaine) et expose la fenêtre à l'extension.
 @MainActor
 final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, WKWebExtensionWindow {
     let host: ExtensionHost
@@ -16,10 +16,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private(set) var currentSpace: Space
     private var tabsBySpace: [UUID: [BrowserTab]] = [:]
     private var activeBySpace: [UUID: BrowserTab] = [:]
+    /// L'onglet dont la page est à l'écran.
+    private var displayedTab: BrowserTab?
     /// Onglets fermés (adresse et espace), pour ⇧⌘T.
     private var closedTabs: [(url: URL, spaceID: UUID)] = []
+    /// Onglets rangés automatiquement après 12 h sans consultation.
+    private(set) var archived: [ArchivedTab] = []
 
-    /// Onglets de l'espace affiché : Ctrl+Tab et Cmd+1…9 restent dans l'espace.
+    /// Onglets de l'espace affiché : Cmd+1…9 restent dans l'espace.
     var tabs: [BrowserTab] { tabsBySpace[currentSpace.id] ?? [] }
     /// Tous les onglets, tous espaces confondus (Cmd+T, extension).
     var allTabs: [BrowserTab] { spaces.flatMap { tabsBySpace[$0.id] ?? [] } }
@@ -35,15 +39,32 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let domainToast = DomainToastView()
     private let insecureStripe = PassthroughView()
     private let trafficLightZone = TrafficLightZone()
+    private let bottomZone = BottomEdgeZone()
+    private let shelf = ShelfView()
+    private let overview = OverviewView()
+    private let switcher = TabSwitcherView()
+    private var switcherWidth: NSLayoutConstraint?
+    private var switcherHeight: NSLayoutConstraint?
     /// Point d'ancrage du popup Bitwarden (coin supérieur droit).
     let popupAnchor = PassthroughView()
 
     private var saveTask: Task<Void, Never>?
+    private var maintenanceTask: Task<Void, Never>?
+    private var shelfTask: Task<Void, Never>?
+    private var monitors: [Any] = []
     /// Historique et favoris (phase 2) ; nil si la base ne s'ouvre pas : le navigateur reste utilisable.
     private let places = PlacesStore.openDefault()
     private lazy var engine = CommandBarEngine(places: places)
     private var suggestionTask: Task<Void, Never>?
-    private var keyMonitor: Any?
+
+    // Sélecteur Ctrl+Tab
+    private var switcherTabs: [BrowserTab] = []
+    private var switcherIndex = 0
+    private var switcherShowTask: Task<Void, Never>?
+    private var pinchAccumulator: CGFloat = 0
+    private var overviewOpening = false
+    /// Ordre d'empilement des pages : la dernière affichée passe devant.
+    private var pageLayerOrder = 0
 
     init(host: ExtensionHost, session: SessionStore, spacesStore: SpacesStore) {
         self.host = host
@@ -70,23 +91,34 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         DownloadManager.shared.onFinished = { [weak self] url in
             self?.domainToast.show(text: "Téléchargé : \(url.lastPathComponent)", symbol: "arrow.down.circle.fill", tint: .systemBlue)
         }
+        EscapeRelay.shared.onUnhandledEscape = { [weak self] webView in
+            guard let self, webView != nil, webView === self.displayedTab?.liveWebView else { return }
+            self.showOverview()
+        }
         host.controller.didOpenWindow(self)
         host.controller.didFocusWindow(self)
-        installControlTabShortcut()
+        installEventMonitors()
+        startMaintenance()
     }
 
     required init?(coder: NSCoder) { fatalError("non utilisé") }
 
-    /// Ctrl+Tab / Ctrl+Maj+Tab : macOS traite la touche Tab avant la fenêtre et les menus
-    /// (navigation au clavier), un raccourci de menu ne se déclenche donc jamais.
-    /// Un moniteur local voit la touche avant tout traitement.
-    private func installControlTabShortcut() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 48, event.modifierFlags.contains(.control),
-                  let self, event.window === self.window else { return event }
-            MainActor.assumeIsolated { self.cycleTabs(by: event.modifierFlags.contains(.shift) ? -1 : 1) }
-            return nil
+    /// Moniteurs locaux : ils voient les événements avant la fenêtre et les menus.
+    /// - Ctrl+Tab : macOS traite Tab (navigation au clavier) avant tout raccourci de menu.
+    /// - Relâcher Ctrl valide le sélecteur.
+    /// - Pincer pour dézoomer sur une page à 100 % ouvre la vue d'ensemble.
+    private func installEventMonitors() {
+        let keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            guard let self, event.window === self.window else { return event }
+            let consumed = MainActor.assumeIsolated { self.handleSwitcherEvent(event) }
+            return consumed ? nil : event
         }
+        let pinch = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
+            guard let self, event.window === self.window else { return event }
+            let consumed = MainActor.assumeIsolated { self.handlePagePinch(event) }
+            return consumed ? nil : event
+        }
+        monitors = [keys, pinch].compactMap { $0 }
     }
 
     private func buildInterface() {
@@ -99,10 +131,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         insecureStripe.layer?.backgroundColor = NSColor.systemRed.cgColor
         insecureStripe.isHidden = true
 
-        for view in [pageContainer, dragStrip, insecureStripe, domainToast, commandBar, trafficLightZone, popupAnchor] {
+        for view in [pageContainer, dragStrip, insecureStripe, bottomZone, shelf, overview, switcher, domainToast, commandBar,
+                     trafficLightZone, popupAnchor] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
+        let switcherWidth = switcher.widthAnchor.constraint(equalToConstant: 400)
+        let switcherHeight = switcher.heightAnchor.constraint(equalToConstant: 190)
+        self.switcherWidth = switcherWidth
+        self.switcherHeight = switcherHeight
         NSLayoutConstraint.activate([
             pageContainer.topAnchor.constraint(equalTo: content.topAnchor),
             pageContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -119,6 +156,25 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             insecureStripe.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             insecureStripe.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             insecureStripe.heightAnchor.constraint(equalToConstant: 3),
+
+            bottomZone.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            bottomZone.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            bottomZone.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            bottomZone.heightAnchor.constraint(equalToConstant: 4),
+
+            shelf.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+            shelf.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            shelf.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            shelf.heightAnchor.constraint(equalToConstant: ShelfView.height),
+
+            overview.topAnchor.constraint(equalTo: content.topAnchor),
+            overview.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            overview.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            overview.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            switcher.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            switcher.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            switcherWidth, switcherHeight,
 
             domainToast.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
             domainToast.centerXAnchor.constraint(equalTo: content.centerXAnchor),
@@ -147,6 +203,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         commandBar.onQueryChange = { [weak self] query in self?.refreshResults(for: query) }
         commandBar.onExecute = { [weak self] result, typed, invert in self?.execute(result, typed: typed, invert: invert) }
         commandBar.onCancel = { [weak self] in self?.hideCommandBar() }
+
+        configureShelf()
+        configureOverview()
     }
 
     private func setTrafficLightsVisible(_ visible: Bool) {
@@ -157,11 +216,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Session
 
+    /// Les onglets sont recréés **endormis** : seule la page affichée se charge au lancement.
     func restoreSession(extraURLs: [URL]) {
         let snapshot = sessionStore.load()
+        archived = snapshot.archived.filter { entry in spaces.contains { $0.id == entry.spaceID } }
         for saved in snapshot.spaces {
             guard let space = space(saved.spaceID) else { continue }
-            saved.tabs.forEach { newTab(url: $0.url, in: space, activate: false) }
+            for record in saved.tabs {
+                let tab = BrowserTab(id: record.id, space: space, host: host, url: record.url, title: record.title,
+                                     lastActivated: record.lastActivated ?? Date())
+                tab.isPinned = record.pinned
+                tab.homeURL = record.homeURL
+                register(tab)
+            }
             if let list = tabsBySpace[space.id], list.indices.contains(saved.activeIndex) {
                 activeBySpace[space.id] = list[saved.activeIndex]
             }
@@ -183,10 +250,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let saved = spaces.map { space -> SessionSnapshot.SpaceTabs in
             let list = (tabsBySpace[space.id] ?? []).filter { $0.url != nil }
             let active = activeBySpace[space.id].flatMap { active in list.firstIndex { $0 === active } } ?? 0
-            return .init(spaceID: space.id, tabs: list.compactMap { tab in tab.url.map { .init(url: $0, title: tab.title) } },
-                         activeIndex: active)
+            return .init(spaceID: space.id, tabs: list.compactMap { tab in
+                tab.url.map { .init(id: tab.id, url: $0, title: tab.title, pinned: tab.isPinned, homeURL: tab.homeURL,
+                                    lastActivated: tab.lastActivated) }
+            }, activeIndex: active)
         }
-        sessionStore.save(SessionSnapshot(spaces: saved, activeSpaceID: currentSpace.id))
+        sessionStore.save(SessionSnapshot(spaces: saved, activeSpaceID: currentSpace.id, archived: archived))
+        SnapshotStore.shared.prune(keeping: Set(allTabs.map(\.id)).union(archived.map(\.id)))
     }
 
     // MARK: Espaces
@@ -199,10 +269,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if let tab = activeBySpace[space.id] ?? tabsBySpace[space.id]?.last {
             display(tab, announce: announce)
         } else {
-            pageContainer.subviews.forEach { $0.removeFromSuperview() }
+            retireDisplayedPage()
             updateChrome(announce: false)
             if announce { announceSpace("Espace vide", symbol: "square.dashed") }
-            showCommandBar(newTab: true)
+            if overview.isHidden { showCommandBar(newTab: true) }
         }
         onSpacesChanged?()
         scheduleSessionSave()
@@ -231,11 +301,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard config.remove(doomed.id) else { return }
         for tab in tabsBySpace[doomed.id] ?? [] {
             host.controller.didCloseTab(tab, windowIsClosing: false)
-            tab.webView.removeFromSuperview()
+            tab.liveWebView?.removeFromSuperview()
+            if displayedTab === tab { displayedTab = nil }
         }
         tabsBySpace[doomed.id] = nil
         activeBySpace[doomed.id] = nil
         closedTabs.removeAll { $0.spaceID == doomed.id }
+        archived.removeAll { $0.spaceID == doomed.id }
         spaces.removeAll { $0 === doomed }
         spacesStore.save(config)
         switchTo(spaces[0])
@@ -248,10 +320,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     /// « Envoyer l'onglet vers… » : l'adresse est rouverte dans l'autre espace, donc avec ses cookies.
+    /// L'identifiant est gardé : la carte conserve sa capture.
     func move(_ tab: BrowserTab, to target: Space) {
         guard tab.space !== target, let url = tab.url else { return }
         close(tab, rememberForReopen: false)
-        newTab(url: url, in: target, activate: true)
+        newTab(url: url, in: target, activate: true, id: tab.id)
         announceSpace("Rechargé avec les cookies de", symbol: "arrow.right.circle.fill")
     }
 
@@ -278,14 +351,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @discardableResult
     func newTab(url: URL?, activate: Bool) -> BrowserTab { newTab(url: url, in: currentSpace, activate: activate) }
 
+    /// - Parameter preload: un onglet ouvert en arrière-plan (Cmd+clic) charge sa page tout de suite.
     @discardableResult
-    func newTab(url: URL?, in space: Space, activate: Bool) -> BrowserTab {
-        let tab = BrowserTab(space: space, host: host)
+    func newTab(url: URL?, in space: Space, activate: Bool, preload: Bool = true, id: UUID = UUID()) -> BrowserTab {
+        let tab = BrowserTab(id: id, space: space, host: host, url: url)
         insert(tab, activate: activate)
-        if let url {
-            if url.isFileURL { tab.webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent()) }
-            else { tab.webView.load(URLRequest(url: url)) }
-        }
+        if !activate && preload && url != nil { _ = tab.webView }
         return tab
     }
 
@@ -297,14 +368,20 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         return tab
     }
 
-    private func insert(_ tab: BrowserTab, activate: Bool) {
+    /// Ajoute l'onglet à son espace (sans l'afficher ni le charger).
+    private func register(_ tab: BrowserTab, at position: Int? = nil) {
         tab.owner = self
-        let spaceID = tab.space.id
-        var list = tabsBySpace[spaceID] ?? []
-        let position = activeBySpace[spaceID].flatMap { active in list.firstIndex { $0 === active } }.map { $0 + 1 } ?? list.count
-        list.insert(tab, at: position)
-        tabsBySpace[spaceID] = list
+        var list = tabsBySpace[tab.space.id] ?? []
+        list.insert(tab, at: min(position ?? list.count, list.count))
+        tabsBySpace[tab.space.id] = list
         host.controller.didOpenTab(tab)
+    }
+
+    private func insert(_ tab: BrowserTab, activate: Bool) {
+        let spaceID = tab.space.id
+        let list = tabsBySpace[spaceID] ?? []
+        let position = activeBySpace[spaceID].flatMap { active in list.firstIndex { $0 === active } }.map { $0 + 1 }
+        register(tab, at: position)
         if activate { select(tab) }
         else if activeBySpace[spaceID] == nil {
             activeBySpace[spaceID] = tab
@@ -321,24 +398,56 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         scheduleSessionSave()
     }
 
-    /// Met la page de l'onglet à l'écran (aucun effet si elle y est déjà).
+    /// Met la page de l'onglet à l'écran (la réveille si elle dormait).
+    ///
+    /// Les pages éveillées restent dans la fenêtre, masquées : les y remettre obligerait WebKit à tout
+    /// redessiner (écran noir visible). La nouvelle page passe devant ; l'ancienne est capturée (sa carte),
+    /// puis masquée. Seule la mise en veille retire une page de la fenêtre.
     private func display(_ tab: BrowserTab, announce: Bool) {
         activeBySpace[tab.space.id] = tab
         tab.lastActivated = Date()
-        guard tab.webView.superview !== pageContainer else { return updateChrome(announce: false) }
-        let previous = allTabs.first { $0.webView.superview === pageContainer }
-        pageContainer.subviews.forEach { $0.removeFromSuperview() }
-        tab.webView.translatesAutoresizingMaskIntoConstraints = false
-        pageContainer.addSubview(tab.webView)
-        NSLayoutConstraint.activate([
-            tab.webView.topAnchor.constraint(equalTo: pageContainer.topAnchor),
-            tab.webView.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
-            tab.webView.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
-            tab.webView.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
-        ])
-        if commandBar.isHidden { window?.makeFirstResponder(tab.webView) }
+        if tab === displayedTab, let view = tab.liveWebView, view.superview === pageContainer, !view.isHidden {
+            return updateChrome(announce: false)
+        }
+        let previous = displayedTab
+        displayedTab = tab
+        let view = tab.webView
+        if view.superview !== pageContainer {
+            view.removeFromSuperview()
+            view.translatesAutoresizingMaskIntoConstraints = false
+            pageContainer.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: pageContainer.topAnchor),
+                view.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
+                view.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
+            ])
+        }
+        pageLayerOrder += 1
+        view.wantsLayer = true
+        view.layer?.zPosition = CGFloat(pageLayerOrder)
+        view.isHidden = false
+        hidePages(except: view)
+        if commandBar.isHidden && overview.isHidden { window?.makeFirstResponder(view) }
         host.controller.didActivateTab(tab, previousActiveTab: previous)
         updateChrome(announce: announce)
+    }
+
+    /// Masque les pages autres que `kept`, après les avoir capturées.
+    private func hidePages(except kept: NSView?) {
+        for other in pageContainer.subviews where other !== kept && !other.isHidden {
+            let owner = allTabs.first { $0.liveWebView === other }
+            Task { [weak self] in
+                await owner?.captureSnapshot(timeout: .milliseconds(400))
+                guard let self, other !== self.displayedTab?.liveWebView else { return }
+                other.isHidden = true
+            }
+        }
+    }
+
+    private func retireDisplayedPage() {
+        displayedTab = nil
+        hidePages(except: nil)
     }
 
     func close(_ tab: BrowserTab) { close(tab, rememberForReopen: true) }
@@ -350,18 +459,23 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         list.remove(at: index)
         tabsBySpace[spaceID] = list
         host.controller.didCloseTab(tab, windowIsClosing: false)
-        tab.webView.removeFromSuperview()
+        tab.liveWebView?.removeFromSuperview()
+        if displayedTab === tab { displayedTab = nil }
         if activeBySpace[spaceID] === tab {
-            activeBySpace[spaceID] = list.isEmpty ? nil : list[min(index, list.count - 1)]
+            activeBySpace[spaceID] = TabOrganizer.recentFirst(list.map(info)).first.flatMap { info in list.first { $0.id == info.id } }
             if tab.space === currentSpace {
                 if let next = activeBySpace[spaceID] { display(next, announce: true) }
-                else { updateChrome(announce: false); showCommandBar(newTab: true) }
+                else {
+                    updateChrome(announce: false)
+                    if overview.isHidden { showCommandBar(newTab: true) }
+                }
             }
         }
         scheduleSessionSave()
     }
 
     func index(of tab: BrowserTab) -> Int { allTabs.firstIndex { $0 === tab } ?? 0 }
+    private func tab(_ id: UUID) -> BrowserTab? { allTabs.first { $0.id == id } }
 
     func tabDidChangeURL(_ tab: BrowserTab) {
         if let url = tab.url { places?.recordVisit(url: url, title: tab.title) }
@@ -372,6 +486,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func tabDidChangeTitle(_ tab: BrowserTab) {
         if let url = tab.url, let title = tab.title { places?.updateTitle(url: url, title: title) }
         if tab === activeTab { updateWindowTitle() }
+    }
+
+    /// Page chargée : sa carte est rafraîchie peu après (le temps que la page se dessine).
+    func tabDidFinishLoading(_ tab: BrowserTab) {
+        guard tab === displayedTab else { return }
+        Task { [weak tab] in
+            try? await Task.sleep(for: .milliseconds(600))
+            await tab?.captureSnapshot()
+        }
     }
 
     /// Indicateur de domaine (avec l'espace dès qu'il y en a plusieurs) et liseré « non sécurisé ».
@@ -393,9 +516,325 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         window?.title = spaces.count > 1 ? "\(page) · \(currentSpace.name)" : page
     }
 
+    // MARK: Épinglés, veille, archivage
+
+    func setPinned(_ tab: BrowserTab, _ pinned: Bool) {
+        guard tab.isPinned != pinned else { return }
+        tab.isPinned = pinned
+        tab.homeURL = pinned ? tab.url : nil
+        domainToast.show(text: pinned ? "Épinglé dans" : "Désépinglé de", symbol: pinned ? "pin.fill" : "pin.slash",
+                         tint: tab.space.color, space: (tab.space.name, tab.space.color))
+        scheduleSessionSave()
+    }
+
+    /// ↺ : un onglet épinglé revient à sa page d'accueil.
+    func goHome(_ tab: BrowserTab) {
+        guard let home = tab.homeURL else { return }
+        tab.webView.load(URLRequest(url: home))
+    }
+
+    private func reopenArchived(_ id: UUID) {
+        guard let entry = archived.first(where: { $0.id == id }) else { return }
+        archived.removeAll { $0.id == id }
+        newTab(url: entry.url, in: space(entry.spaceID) ?? currentSpace, activate: true, id: entry.id)
+    }
+
+    /// Vérification régulière : veille des onglets inutilisés, archivage des onglets oubliés.
+    private func startMaintenance() {
+        let interval = min(30, max(5, TabOrganizer.sleepAfter / 4))
+        maintenanceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                self?.runMaintenance()
+            }
+        }
+    }
+
+    private func runMaintenance() {
+        let now = Date()
+        let infos = allTabs.map(info)
+        let sleepers = TabOrganizer.sleepCandidates(infos, activeID: displayedTab?.id, now: now).compactMap(tab)
+        if !sleepers.isEmpty {
+            sleepers.forEach { $0.sleep() }
+            let awake = allTabs.filter { !$0.isAsleep }.count
+            NSLog("Vision Browser · veille : \(sleepers.count) onglet(s) endormi(s), \(awake) éveillé(s) sur \(allTabs.count)")
+        }
+        // Le dernier onglet actif de chaque espace reste : revenir dans un espace ne doit pas le trouver vide.
+        let kept = Set(activeBySpace.values.map(\.id))
+        let toArchive = TabOrganizer.archiveCandidates(infos, activeID: displayedTab?.id, now: now).filter { !kept.contains($0) }
+        for id in toArchive {
+            guard let tab = tab(id), let url = tab.url else { continue }
+            close(tab, rememberForReopen: false)
+            archived.insert(ArchivedTab(id: tab.id, url: url, title: tab.title, spaceID: tab.space.id, archivedAt: now), at: 0)
+        }
+        if !toArchive.isEmpty {
+            archived = Array(archived.prefix(ArchivedTab.limit))
+            if !overview.isHidden { overview.reload() }
+            scheduleSessionSave()
+        }
+    }
+
+    private func info(_ tab: BrowserTab) -> TabInfo {
+        TabInfo(id: tab.id, url: tab.url, title: tab.title, isPinned: tab.isPinned, isAwake: !tab.isAsleep, lastActivated: tab.lastActivated)
+    }
+
+    private func card(_ tab: BrowserTab) -> TabCard {
+        let host = DomainPolicy.displayHost(for: tab.url) ?? ""
+        let away = tab.homeURL.map { home in tab.url.map { PlacesStore.key($0) != PlacesStore.key(home) } ?? false } ?? false
+        return TabCard(id: tab.id, title: tab.title?.isEmpty == false ? tab.title! : (host.isEmpty ? "Nouvel onglet" : host),
+                       host: host, url: tab.url, image: tab.snapshot, spaceColor: tab.space.color, isPinned: tab.isPinned,
+                       isActive: activeBySpace[tab.space.id] === tab, canGoHome: tab.isPinned && away)
+    }
+
+    private func card(_ entry: ArchivedTab) -> TabCard {
+        let host = DomainPolicy.displayHost(for: entry.url) ?? ""
+        return TabCard(id: entry.id, title: entry.title?.isEmpty == false ? entry.title! : host, host: host, url: entry.url,
+                       image: SnapshotStore.shared.image(for: entry.id), spaceColor: space(entry.spaceID)?.color ?? .gray,
+                       isArchived: true)
+    }
+
+    // MARK: Ctrl+Tab (ordre d'utilisation récente)
+
+    /// Renvoie vrai si l'événement est consommé.
+    private func handleSwitcherEvent(_ event: NSEvent) -> Bool {
+        if event.type == .flagsChanged {
+            if !switcherTabs.isEmpty && !event.modifierFlags.contains(.control) { commitSwitcher() }
+            return false
+        }
+        if !switcherTabs.isEmpty && event.keyCode == 53 { cancelSwitcher(); return true }
+        guard event.keyCode == 48, event.modifierFlags.contains(.control) else { return false }
+        guard overview.isHidden, commandBar.isHidden else { return true }
+        let step = event.modifierFlags.contains(.shift) ? -1 : 1
+        if switcherTabs.isEmpty {
+            let order = TabOrganizer.recentFirst(tabs.map(info)).compactMap { info in tabs.first { $0.id == info.id } }
+            guard order.count > 1 else { return true }
+            switcherTabs = order
+            switcherIndex = step > 0 ? 1 : order.count - 1
+            hideShelf()
+            // Un appui bref bascule sans afficher le sélecteur (pas de clignotement).
+            switcherShowTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(180))
+                guard !Task.isCancelled else { return }
+                self?.presentSwitcher()
+            }
+        } else {
+            switcherIndex = (switcherIndex + step + switcherTabs.count) % switcherTabs.count
+            if switcher.isHidden { presentSwitcher() } else { switcher.select(switcherIndex) }
+        }
+        return true
+    }
+
+    private func presentSwitcher() {
+        switcherShowTask?.cancel()
+        guard !switcherTabs.isEmpty else { return }
+        Task { [weak self] in
+            await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
+            guard let self, !self.switcherTabs.isEmpty else { return }
+            self.switcher.show(cards: self.switcherTabs.map(self.card), selected: self.switcherIndex)
+            let size = self.switcher.preferredSize(maxWidth: (self.window?.contentView?.bounds.width ?? 800) - 80)
+            self.switcherWidth?.constant = size.width
+            self.switcherHeight?.constant = size.height
+        }
+    }
+
+    private func commitSwitcher() {
+        let target = switcherTabs.indices.contains(switcherIndex) ? switcherTabs[switcherIndex] : nil
+        cancelSwitcher()
+        if let target { select(target) }
+    }
+
+    private func cancelSwitcher() {
+        switcherShowTask?.cancel()
+        switcherTabs = []
+        switcher.isHidden = true
+    }
+
+    // MARK: Étagère du bas
+
+    private func configureShelf() {
+        shelf.isHidden = true
+        shelf.alphaValue = 0
+        bottomZone.onEnter = { [weak self] in
+            self?.shelfTask?.cancel()
+            // Courte attente : un passage rapide de la souris (vers le Dock) ne fait pas monter l'étagère.
+            self?.shelfTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                self?.showShelf()
+            }
+        }
+        bottomZone.onExit = { [weak self] in
+            if self?.shelf.isHidden ?? true { self?.shelfTask?.cancel() }
+        }
+        shelf.onMouseExit = { [weak self] in
+            self?.shelfTask?.cancel()
+            self?.shelfTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled, let self, let window = self.window else { return }
+                let point = self.shelf.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+                if !self.shelf.bounds.contains(point) { self.hideShelf() }
+            }
+        }
+        shelf.onSelectTab = { [weak self] id in
+            guard let self, let tab = self.tab(id) else { return }
+            self.hideShelf()
+            self.select(tab)
+        }
+        shelf.onHome = { [weak self] id in
+            guard let self, let tab = self.tab(id) else { return }
+            self.goHome(tab)
+            self.hideShelf()
+            self.select(tab)
+        }
+        shelf.onSelectSpace = { [weak self] id in
+            guard let self, let space = self.space(id) else { return }
+            self.switchTo(space)
+            self.refreshShelf()
+        }
+        shelf.onShowAll = { [weak self] in self?.showOverview() }
+    }
+
+    private func showShelf() {
+        guard shelf.isHidden, overview.isHidden, commandBar.isHidden, switcherTabs.isEmpty, window?.isKeyWindow == true else { return }
+        Task { [weak self] in
+            await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
+            guard let self, self.overview.isHidden, self.commandBar.isHidden else { return }
+            self.refreshShelf()
+            self.shelf.isHidden = false
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.15
+                MainActor.assumeIsolated { self.shelf.animator().alphaValue = 1 }
+            }, completionHandler: nil)
+        }
+    }
+
+    private func refreshShelf() {
+        let content = TabOrganizer.shelf(tabs.map(info))
+        let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
+        shelf.update(spaces: spaces.map { .init(id: $0.id, name: $0.name, color: $0.color, count: tabsBySpace[$0.id]?.count ?? 0,
+                                                isCurrent: $0 === currentSpace) },
+                     pinned: content.pinned.compactMap { byID[$0.id] }.map(card),
+                     recent: content.recent.compactMap { byID[$0.id] }.map(card))
+    }
+
+    private func hideShelf() {
+        shelfTask?.cancel()
+        guard !shelf.isHidden else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            MainActor.assumeIsolated { self.shelf.animator().alphaValue = 0 }
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated { if self?.shelf.alphaValue == 0 { self?.shelf.isHidden = true } }
+        })
+    }
+
+    // MARK: Vue d'ensemble
+
+    private func configureOverview() {
+        overview.contentProvider = { [weak self] spaceID in self?.overviewContent(for: spaceID) ?? OverviewContent() }
+        overview.onOpenTab = { [weak self] id in
+            guard let self, let tab = self.tab(id) else { return }
+            self.select(tab)
+            self.closeOverview(expanding: id)
+        }
+        overview.onCloseTab = { [weak self] id in
+            guard let self, let tab = self.tab(id) else { return }
+            self.close(tab)
+            self.overview.reload()
+        }
+        overview.onHome = { [weak self] id in
+            guard let self, let tab = self.tab(id) else { return }
+            self.goHome(tab)
+            self.select(tab)
+            self.closeOverview(expanding: id)
+        }
+        overview.onReopenArchived = { [weak self] id in
+            guard let self else { return }
+            self.reopenArchived(id)
+            self.closeOverview(expanding: id)
+        }
+        overview.onOpenFavorite = { [weak self] url, spaceID in
+            guard let self else { return }
+            self.newTab(url: url, in: self.space(spaceID) ?? self.currentSpace, activate: true)
+            self.closeOverview(expanding: nil)
+        }
+        overview.onPin = { [weak self] id, pinned in
+            guard let self, let tab = self.tab(id) else { return }
+            self.setPinned(tab, pinned)
+            self.overview.reload()
+        }
+        overview.onMove = { [weak self] id, spaceID in
+            guard let self, let tab = self.tab(id), let target = self.space(spaceID), tab.space !== target else { return }
+            let shown = self.overview.shownSpaceID
+            self.move(tab, to: target)
+            if let shown { self.overview.show(space: shown) }
+            self.overview.reload()
+        }
+        overview.onDismiss = { [weak self] in self?.closeOverview(expanding: self?.activeTab?.id) }
+    }
+
+    private func overviewContent(for spaceID: UUID) -> OverviewContent {
+        let list = tabsBySpace[spaceID] ?? []
+        let byID = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
+        let groups: [OverviewContent.Group] = TabOrganizer.groups(list.filter { !$0.isPinned }.map(info)).map { group in
+            switch group {
+            case .single(let info): .single(card(byID[info.id]!))
+            case .stack(let site, let infos): .stack(site: site, cards: infos.compactMap { byID[$0.id] }.map(card))
+            }
+        }
+        return OverviewContent(
+            pinned: list.filter(\.isPinned).map(card),
+            groups: groups,
+            archived: archived.filter { $0.spaceID == spaceID }.map(card),
+            favorites: (places?.favorites(limit: 60) ?? []).map { .init(title: $0.title ?? PlacesStore.host($0.url), url: $0.url) })
+    }
+
+    func showOverview() {
+        guard overview.isHidden, !overviewOpening else { return }
+        overviewOpening = true
+        hideShelf()
+        cancelSwitcher()
+        if !commandBar.isHidden { hideCommandBar() }
+        Task { [weak self] in
+            await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
+            guard let self else { return }
+            self.overviewOpening = false
+            self.overview.present(spaces: self.spaces.map { .init(id: $0.id, name: $0.name, color: $0.color) },
+                                  showing: self.currentSpace.id, activeTabID: self.activeTab?.id,
+                                  pageImage: self.displayedTab?.snapshot)
+        }
+    }
+
+    private func closeOverview(expanding id: UUID?) {
+        guard !overview.isHidden else { return }
+        overview.dismiss(expanding: id) { [weak self] in
+            guard let self else { return }
+            if let view = self.displayedTab?.liveWebView { self.window?.makeFirstResponder(view) }
+            else { self.showCommandBar(newTab: true) }
+        }
+    }
+
+    /// Pincer pour dézoomer sur une page à taille réelle ouvre la vue d'ensemble (comme Safari).
+    private func handlePagePinch(_ event: NSEvent) -> Bool {
+        guard overview.isHidden, let view = displayedTab?.liveWebView, view.magnification <= 1.001 else { return false }
+        let point = view.convert(event.locationInWindow, from: nil)
+        guard view.bounds.contains(point) else { return false }
+        if event.phase == .began { pinchAccumulator = 0 }
+        guard event.magnification < 0 || pinchAccumulator < 0 else { return false }
+        pinchAccumulator += event.magnification
+        if pinchAccumulator < -0.1 {
+            pinchAccumulator = 0
+            showOverview()
+        }
+        if event.phase == .ended || event.phase == .cancelled { pinchAccumulator = 0 }
+        return true
+    }
+
     // MARK: Barre de commande (Cmd+T / Cmd+L)
 
     private func showCommandBar(newTab: Bool) {
+        hideShelf()
+        if !overview.isHidden { overview.isHidden = true }
         commandBar.present(text: newTab ? "" : (activeTab?.url?.absoluteString ?? ""), newTab: newTab)
         window?.makeFirstResponder(commandBar.field)
         refreshResults(for: commandBar.query)
@@ -404,7 +843,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func hideCommandBar() {
         suggestionTask?.cancel()
         commandBar.isHidden = true
-        if let webView = activeTab?.webView { window?.makeFirstResponder(webView) }
+        if let webView = displayedTab?.liveWebView { window?.makeFirstResponder(webView) }
     }
 
     private var openTabInfos: [OpenTabInfo] {
@@ -422,7 +861,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Résultats locaux immédiatement, puis suggestions du moteur de recherche dès qu'elles arrivent.
     private func refreshResults(for query: String) {
-        commandBar.show(results: engine.results(for: query, tabs: openTabInfos, context: commandContext))
+        commandBar.show(results: engine.results(for: query, tabs: openTabInfos, context: commandContext, archived: archived))
         suggestionTask?.cancel()
         guard case .search? = AddressInput.parse(query) else { return }
         suggestionTask = Task { [weak self] in
@@ -431,7 +870,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             let suggestions = await SearchSuggestions.fetch(query)
             guard !Task.isCancelled, let self, !self.commandBar.isHidden, self.commandBar.query == query else { return }
             self.commandBar.show(results: self.engine.results(for: query, tabs: self.openTabInfos, context: self.commandContext,
-                                                             suggestions: suggestions), keepSelection: true)
+                                                             suggestions: suggestions, archived: self.archived), keepSelection: true)
         }
     }
 
@@ -445,7 +884,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         switch result.kind {
         case .openTab(let id, _):
-            if let tab = allTabs.first(where: { $0.id == id }) { select(tab) }
+            if let tab = tab(id) { select(tab) }
+        case .archived(let id, _):
+            reopenArchived(id)
         case .command(.copyAddress):
             guard let url = activeTab?.url else { return }
             NSPasteboard.general.clearContents()
@@ -499,11 +940,26 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Actions (menus et raccourcis)
 
+    /// Dans la vue d'ensemble, ⌘D et ⌘W visent la carte choisie ; ailleurs, l'onglet affiché.
+    private var targetTab: BrowserTab? { overview.focusedTabID.flatMap(tab) ?? activeTab }
+
     @objc func newTabAction(_ sender: Any?) { showCommandBar(newTab: true) }
     @objc func editAddressAction(_ sender: Any?) { showCommandBar(newTab: false) }
     @objc func toggleFavoriteAction(_ sender: Any?) { toggleFavoriteForActiveTab() }
+    @objc func togglePinAction(_ sender: Any?) {
+        guard let tab = targetTab else { return }
+        setPinned(tab, !tab.isPinned)
+        overview.reload()
+    }
+    @objc func showOverviewAction(_ sender: Any?) {
+        overview.isHidden ? showOverview() : closeOverview(expanding: activeTab?.id)
+    }
     @objc func closeTabAction(_ sender: Any?) {
         if !commandBar.isHidden { return hideCommandBar() }
+        if !overview.isHidden {
+            if let tab = targetTab { close(tab); overview.reload() }
+            return
+        }
         if let activeTab { close(activeTab) }
     }
     @objc func reopenClosedTabAction(_ sender: Any?) {
@@ -550,6 +1006,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func switchSpaceByNumberAction(_ sender: Any?) {
         guard let n = (sender as? NSMenuItem)?.tag, spaces.indices.contains(n - 1) else { return }
         switchTo(spaces[n - 1])
+        if !overview.isHidden { overview.show(space: spaces[n - 1].id) }
     }
     @objc func moveTabToSpaceAction(_ sender: Any?) {
         guard let id = (sender as? NSMenuItem)?.representedObject as? UUID, let space = space(id), let tab = activeTab else { return }
@@ -564,21 +1021,30 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
-        case #selector(deleteSpaceAction(_:)): spaces.count > 1
-        case #selector(moveTabToSpaceAction(_:)): activeTab?.url != nil
+        case #selector(deleteSpaceAction(_:)): return spaces.count > 1
+        case #selector(moveTabToSpaceAction(_:)): return activeTab?.url != nil
         case #selector(routeHostHereAction(_:)):
-            activeTab?.url.map { config.spaceID(for: $0) != currentSpace.id && $0.host() != nil } ?? false
-        case #selector(switchSpaceByNumberAction(_:)): spaces.indices.contains(item.tag - 1)
-        default: true
+            return activeTab?.url.map { config.spaceID(for: $0) != currentSpace.id && $0.host() != nil } ?? false
+        case #selector(switchSpaceByNumberAction(_:)): return spaces.indices.contains(item.tag - 1)
+        case #selector(togglePinAction(_:)):
+            item.title = targetTab?.isPinned == true ? "Désépingler l'onglet" : "Épingler l'onglet"
+            return targetTab != nil
+        default: return true
         }
     }
 
     // MARK: NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) { host.controller.didFocusWindow(self) }
+    func windowDidResignKey(_ notification: Notification) {
+        cancelSwitcher()
+        hideShelf()
+    }
 
     func windowWillClose(_ notification: Notification) {
         saveSessionNow()
+        maintenanceTask?.cancel()
+        for monitor in monitors { NSEvent.removeMonitor(monitor) }
         host.controller.didCloseWindow(self)
     }
 
