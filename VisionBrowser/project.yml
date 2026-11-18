@@ -29,6 +29,9 @@ targets:
         CFBundleDevelopmentRegion: fr
         CFBundleLocalizations: [fr]
         CFBundleName: Vision Browser
+        # Sans ces deux lignes, XcodeGen écrit « 1.0 » et « 1 » en dur au lieu des réglages de version ci-dessus.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: "26.0"
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.productivity
