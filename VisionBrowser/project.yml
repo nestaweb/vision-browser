@@ -34,6 +34,10 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: "26.0"
         NSPrincipalClass: NSApplication
+        # Un navigateur doit pouvoir afficher les sites sans HTTPS. L'exception ne vaut que pour les pages web
+        # (WebKit) : le reste de l'app (CLI Bitwarden, téléchargements internes) reste tenu au HTTPS.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
         LSApplicationCategoryType: public.app-category.productivity
         # Permet à Vision Browser de devenir le navigateur par défaut.
         CFBundleURLTypes:

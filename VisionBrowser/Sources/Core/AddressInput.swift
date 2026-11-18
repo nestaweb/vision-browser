@@ -35,6 +35,15 @@ enum AddressInput: Equatable, Sendable {
         return .search(query: text, url: url)
     }
 
+    /// Adresse tapée sans schéma et complétée en `https://` : la même en `http://`, pour le repli si le site ne
+    /// répond pas en HTTPS (comme Safari et Chrome). `nil` si le schéma a été tapé ou si ce n'est pas une adresse.
+    static func httpFallback(forTyped raw: String) -> URL? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard case .url(let url)? = parse(text, engine: .fallback), url.scheme == "https",
+              !text.lowercased().hasPrefix("https:") else { return nil }
+        return URL(string: "http://" + text)
+    }
+
     private static func looksLikeHost(_ text: String) -> Bool {
         let host = text.split(separator: "/", maxSplits: 1).first.map(String.init) ?? text
         let hostOnly = host.split(separator: ":").first.map(String.init) ?? host

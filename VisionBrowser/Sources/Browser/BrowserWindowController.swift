@@ -410,8 +410,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// - Parameter preload: un onglet ouvert en arrière-plan (Cmd+clic) charge sa page tout de suite.
     @discardableResult
-    func newTab(url: URL?, in space: Space, activate: Bool, preload: Bool = true, id: UUID = UUID()) -> BrowserTab {
-        let tab = BrowserTab(id: id, space: space, host: host, url: url)
+    func newTab(url: URL?, in space: Space, activate: Bool, preload: Bool = true, id: UUID = UUID(),
+                httpFallback: URL? = nil) -> BrowserTab {
+        let tab = BrowserTab(id: id, space: space, host: host, url: url, httpFallback: httpFallback)
         insert(tab, activate: activate)
         if !activate && preload && url != nil { _ = tab.webView }
         return tab
@@ -1075,7 +1076,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let inNewTab = commandBar.isNewTab != (mode == .otherTab)
         hideCommandBar()
         guard let result else {
-            if let input = AddressInput.parse(typed) { open(input.url, inNewTab: inNewTab) }
+            if let input = AddressInput.parse(typed) {
+                open(input.url, inNewTab: inNewTab, httpFallback: AddressInput.httpFallback(forTyped: typed))
+            }
             return
         }
         if mode == .copy, !result.isCopyable, let url = result.url {
@@ -1119,7 +1122,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             if let tab = activeTab, let space = space(id) { move(tab, to: space) }
         case .command(.routeHostHere):
             routeActiveHostToCurrentSpace()
-        case .favorite, .history, .address, .search, .suggestion:
+        case .address:
+            if let url = result.url { open(url, inNewTab: inNewTab, httpFallback: AddressInput.httpFallback(forTyped: typed)) }
+        case .favorite, .history, .search, .suggestion:
             if let url = result.url { open(url, inNewTab: inNewTab) }
         }
     }
@@ -1130,9 +1135,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         domainToast.show(text: toast, symbol: "doc.on.doc.fill", tint: .systemOrange)
     }
 
-    private func open(_ url: URL, inNewTab: Bool) {
-        if inNewTab || activeTab == nil { newTab(url: url, activate: true) }
-        else { activeTab?.webView.load(URLRequest(url: url)) }
+    private func open(_ url: URL, inNewTab: Bool, httpFallback: URL? = nil) {
+        if inNewTab || activeTab == nil { newTab(url: url, in: currentSpace, activate: true, httpFallback: httpFallback) }
+        else { activeTab?.load(url, httpFallback: httpFallback) }
+    }
+
+    /// Le site ne répond pas en HTTPS : la page est rechargée en HTTP, on le dit (la connexion n'est pas chiffrée).
+    func tabFellBackToHTTP(_ tab: BrowserTab) {
+        guard tab === activeTab else { return }
+        domainToast.show(text: "Site sans HTTPS : connexion non chiffrée", symbol: "lock.open.fill", tint: .systemOrange)
     }
 
     private func toggleFavoriteForActiveTab() {

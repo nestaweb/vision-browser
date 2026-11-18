@@ -35,16 +35,71 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
 
     /// - Parameter configuration: fournie par WebKit pour les fenêtres ouvertes par la page
     ///   (`target=_blank`, `window.open`) : la vue est alors créée tout de suite, sans chargement.
+    /// - Parameter httpFallback: voir `load(_:httpFallback:)`, pour la première page de l'onglet.
     init(id: UUID = UUID(), space: Space, host: ExtensionHost, url: URL? = nil, title: String? = nil,
-         lastActivated: Date = Date(), configuration: WKWebViewConfiguration? = nil) {
+         lastActivated: Date = Date(), configuration: WKWebViewConfiguration? = nil, httpFallback: URL? = nil) {
         self.id = id
         self.space = space
         self.host = host
         self.url = url
         self.title = title
         self.lastActivated = lastActivated
+        self.pendingHTTPFallback = httpFallback
         super.init()
         if let configuration { makeWebView(configuration: configuration) }
+    }
+
+    // MARK: Repli HTTPS → HTTP
+
+    /// Adresse tapée sans schéma (`exemple.fr`) : elle part en HTTPS ; si le serveur n'y répond pas (port fermé,
+    /// certificat refusé, ou rien au bout de `httpsPatience`), on la recharge en HTTP, comme Safari et Chrome.
+    /// Jamais pour un lien, un favori ou une adresse tapée avec `https://` : là, l'échec reste un échec.
+    private var pendingHTTPFallback: URL?
+    private var httpsWatchdog: Task<Void, Never>?
+    static let httpsPatience: Duration = .seconds(4)
+
+    /// Charge une adresse ; `httpFallback` est sa version `http://` quand le schéma n'a pas été tapé.
+    func load(_ url: URL, httpFallback: URL? = nil) {
+        pendingHTTPFallback = httpFallback
+        webView.load(URLRequest(url: url))
+        armHTTPSWatchdog()
+    }
+
+    private func armHTTPSWatchdog() {
+        httpsWatchdog?.cancel()
+        guard pendingHTTPFallback != nil else { return }
+        httpsWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.httpsPatience)
+            guard !Task.isCancelled else { return }
+            self?.fallBackToHTTP()
+        }
+    }
+
+    /// Le serveur a répondu en HTTPS (ou une autre navigation a pris le relais) : plus de repli.
+    private func settleHTTPS() {
+        pendingHTTPFallback = nil
+        httpsWatchdog?.cancel()
+        httpsWatchdog = nil
+    }
+
+    private func fallBackToHTTP() {
+        guard let insecure = pendingHTTPFallback, let view = liveWebView else { return }
+        settleHTTPS()
+        view.stopLoading()
+        view.load(URLRequest(url: insecure))
+        owner?.tabFellBackToHTTP(self)
+    }
+
+    /// Échecs qui veulent dire « pas de HTTPS ici » ; une adresse introuvable (DNS) échouerait aussi en HTTP.
+    static func meansNoHTTPS(_ error: any Error) -> Bool {
+        let error = error as NSError
+        guard error.domain == NSURLErrorDomain else { return false }
+        let codes: Set<Int> = [NSURLErrorTimedOut, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost,
+                               NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate,
+                               NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
+                               NSURLErrorServerCertificateNotYetValid, NSURLErrorClientCertificateRejected,
+                               NSURLErrorClientCertificateRequired]
+        return codes.contains(error.code)
     }
 
     /// La vue de la page ; réveille l'onglet s'il dormait.
@@ -56,7 +111,7 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
             self.savedInteractionState = nil
         } else if let url {
             if url.isFileURL { view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent()) }
-            else { view.load(URLRequest(url: url)) }
+            else { view.load(URLRequest(url: url)); armHTTPSWatchdog() }
         }
         return view
     }
@@ -218,8 +273,13 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.isForMainFrame { settleHTTPS() }
         // Ce que WebKit ne sait pas afficher (PDF exclus) est téléchargé.
         decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        if pendingHTTPFallback != nil, Self.meansNoHTTPS(error) { fallBackToHTTP() } else { settleHTTPS() }
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
