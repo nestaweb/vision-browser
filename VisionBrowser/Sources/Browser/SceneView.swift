@@ -1,11 +1,13 @@
 import AppKit
 
-/// Contenu d'un espace pour la Scène, préparé par la fenêtre : épinglés, onglets, puis archivés.
+/// Contenu d'un espace pour la Scène, préparé par la fenêtre : l'accueil, épinglés, onglets, puis archivés.
 struct SceneContent {
+    /// L'accueil (les tâches) : toujours la première vignette de la rangée.
+    var home: TabCard?
     var pinned: [TabCard] = []
     var tabs: [TabCard] = []
     var archived: [TabCard] = []
-    var all: [TabCard] { pinned + tabs + archived }
+    var all: [TabCard] { (home.map { [$0] } ?? []) + pinned + tabs + archived }
 }
 
 /// Vue d'ensemble « Scène » (D3).
@@ -19,6 +21,8 @@ struct SceneContent {
 @MainActor
 final class SceneView: FlippedView {
     struct SpaceInfo { var id: UUID; var name: String; var color: NSColor }
+    /// Identifiant de la vignette « Accueil » (ce n'est pas un onglet).
+    static let homeCardID = UUID(uuidString: "00000000-0000-0000-0000-00000000A0CE")!
 
     // Données et actions fournies par la fenêtre.
     var contentProvider: ((UUID) -> SceneContent)?
@@ -187,7 +191,7 @@ final class SceneView: FlippedView {
 
     /// Menu d'un onglet (vignette ou épinglé) : épingler / désépingler, fermer, envoyer vers un autre espace.
     func contextMenu(for id: UUID) -> NSMenu? {
-        guard let card = cards.first(where: { $0.id == id }) else { return nil }
+        guard id != Self.homeCardID, let card = cards.first(where: { $0.id == id }) else { return nil }
         let menu = NSMenu()
         if card.isArchived {
             menu.addItem(ClosureMenuItem("Rouvrir") { [weak self] in self?.onReopenArchived?(id) })
@@ -455,7 +459,7 @@ final class SceneView: FlippedView {
         pinnedList.update(items: content.pinned.filter(matches))
         railEntries.forEach { $0.removeFromSuperview() }
         railEntries = spaces.map { space in
-            let count = (contentProvider?(space.id) ?? SceneContent()).all.filter { matches($0) && !$0.isArchived }.count
+            let count = (contentProvider?(space.id) ?? SceneContent()).all.filter { matches($0) && !$0.isArchived && $0.id != Self.homeCardID }.count
             let entry = RailEntry(space: space, count: count, isCurrent: space.id == shownSpaceID)
             entry.onClick = { [weak self] in
                 guard let self, space.id != self.shownSpaceID else { return }
@@ -508,7 +512,7 @@ final class SceneView: FlippedView {
             railMark.backgroundColor = spaces[current].color.cgColor
             railMark.frame = CGRect(x: 20, y: SceneLayout.margin + CGFloat(current) * 34, width: 3, height: 30)
         }
-        hint.frame = NSRect(x: 36, y: bounds.height - SceneLayout.margin - 52, width: SceneLayout.railWidth - 40, height: 52)
+        hint.frame = NSRect(x: 36, y: bounds.height - SceneLayout.margin - 68, width: SceneLayout.railWidth - 40, height: 68)
         // Épinglés : sous les espaces, jusqu'à l'aide (toute cette zone accepte une vignette glissée).
         let pinnedTop = SceneLayout.margin + CGFloat(spaces.count) * 34 + 24
         pinnedList.frame = NSRect(x: 20, y: pinnedTop, width: SceneLayout.railWidth - 32, height: max(hint.frame.minY - 16 - pinnedTop, 40))
@@ -584,6 +588,7 @@ final class SceneView: FlippedView {
         case 51: if !filter.isEmpty { filter.removeLast(); applyFilter() }
         case 123: select(SceneLayout.step(selected, by: -1, count: cards.count))
         case 124: select(SceneLayout.step(selected, by: 1, count: cards.count))
+        case 115: if let home = cards.firstIndex(where: { $0.id == Self.homeCardID }) { select(home) }   // fn+← : l'accueil
         case 126: goSpace(by: -1)
         case 125: goSpace(by: 1)
         default:
@@ -610,7 +615,7 @@ final class SceneView: FlippedView {
         let text = NSMutableAttributedString()
         let key: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: Design.Palette.paper(.secondary)]
         let plain: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: Design.Palette.paper(.tertiary)]
-        for (keys, label) in [("↑ ↓", " espaces\n"), ("← →", " onglets\n"), ("↩", " ouvrir · ")] {
+        for (keys, label) in [("↑ ↓", " espaces\n"), ("← →", " onglets\n"), ("⇧⌘H", " accueil\n"), ("↩", " ouvrir · ")] {
             text.append(NSAttributedString(string: keys, attributes: key))
             text.append(NSAttributedString(string: label, attributes: plain))
         }
@@ -657,6 +662,9 @@ final class SceneThumbView: FlippedView, NSDraggingSource {
         image.masksToBounds = true
         image.cornerRadius = Design.Shape.thumbRadius
         image.backgroundColor = NSColor(white: 0.2, alpha: 1).cgColor
+        // Un filet fin : une page sombre (l'accueil, un site en thème sombre) ne se fond pas dans la salle.
+        image.borderWidth = 1
+        image.borderColor = Design.Palette.paper.withAlphaComponent(0.12).cgColor
         layer?.addSublayer(image)
         current.backgroundColor = Design.Palette.paper.cgColor
         current.cornerRadius = 1.5
@@ -696,7 +704,7 @@ final class SceneThumbView: FlippedView, NSDraggingSource {
 
     /// Glisser une vignette sur un espace du rail l'y déplace.
     override func mouseDragged(with event: NSEvent) {
-        guard let start = mouseDownPoint, !card.isArchived,
+        guard let start = mouseDownPoint, !card.isArchived, card.id != SceneView.homeCardID,
               hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) > 4 else { return }
         mouseDownPoint = nil
         let item = NSPasteboardItem()

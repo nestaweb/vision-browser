@@ -30,6 +30,8 @@ final class HomePage: NSObject, WKURLSchemeHandler, WKScriptMessageHandlerWithRe
     private let store: TaskStore?
     private(set) lazy var webView: WKWebView = makeWebView()
     private var loaded = false
+    /// Dernière capture de l'accueil, pour sa vignette dans la Scène.
+    var snapshot: NSImage?
 
     init(store: TaskStore? = TaskStore.openDefault()) {
         self.store = store
@@ -57,6 +59,32 @@ final class HomePage: NSObject, WKURLSchemeHandler, WKScriptMessageHandlerWithRe
             webView.load(URLRequest(url: Self.url))
         } else {
             webView.evaluateJavaScript("window.visionHome && visionHome.refresh('\(space.uuidString)')")
+        }
+    }
+
+    /// Capture l'accueil s'il est à l'écran (une vue masquée ne se capture pas).
+    func captureSnapshot() async {
+        guard loaded, !webView.isHidden, webView.window != nil,
+              let image = try? await webView.takeSnapshot(configuration: nil) else { return }
+        snapshot = image
+    }
+
+    /// Vignette tant que l'accueil n'a jamais été capturé : la salle, la barre d'ajout claire, deux lignes.
+    static func placeholder(size: NSSize = NSSize(width: 640, height: 400)) -> NSImage {
+        NSImage(size: size, flipped: true) { rect in
+            Design.Palette.house.setFill()
+            rect.fill()
+            let w = rect.width
+            Design.Palette.paper.setFill()
+            NSBezierPath(roundedRect: NSRect(x: w * 0.2, y: rect.height * 0.12, width: w * 0.32, height: rect.height * 0.07), xRadius: 4, yRadius: 4).fill()
+            Design.Palette.sheet.setFill()
+            NSBezierPath(roundedRect: NSRect(x: w * 0.2, y: rect.height * 0.26, width: w * 0.72, height: rect.height * 0.1), xRadius: 8, yRadius: 8).fill()
+            Design.Palette.paper(.tertiary).setFill()
+            for (index, width) in [0.6, 0.45, 0.52].enumerated() {
+                NSBezierPath(roundedRect: NSRect(x: w * 0.2, y: rect.height * (0.5 + Double(index) * 0.1), width: w * width, height: rect.height * 0.035),
+                             xRadius: 2, yRadius: 2).fill()
+            }
+            return true
         }
     }
 

@@ -50,7 +50,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Vue d'ensemble « Scène » (D3) : la page recule, rangée des onglets dessous, rail des espaces à gauche.
     private let overview = SceneView()
     /// Page affichée à l'ouverture de la Scène : Échap y ramène, même après avoir changé d'espace.
-    private var sceneOrigin: (space: Space, tab: BrowserTab?)?
+    private var sceneOrigin: (space: Space, tab: BrowserTab?, home: Bool)?
     private let switcher = TabSwitcherView()
     private var switcherWidth: NSLayoutConstraint?
     /// Distance de l'étiquette du haut au bord : agrandie en plein écran pour passer sous l'encoche.
@@ -471,6 +471,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let previous = displayedTab
         let transition = pageTransition(from: previous, fromSpace: fromSpace, to: tab)
         displayedTab = tab
+        // L'accueil quitte l'écran : sa capture sert de vignette dans la Scène.
+        if homeVisible { Task { [home] in await home.captureSnapshot() } }
         homeVisible = false
         let view = tab.webView
         if view.superview !== pageContainer {
@@ -859,7 +861,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func configureOverview() {
         overview.contentProvider = { [weak self] spaceID in self?.sceneContent(for: spaceID) ?? SceneContent() }
         overview.onOpenTab = { [weak self] id in
-            guard let self, let tab = self.tab(id) else { return }
+            guard let self else { return }
+            if id == SceneView.homeCardID { return self.openHomeFromScene() }
+            guard let tab = self.tab(id) else { return }
             self.select(tab)
             self.closeOverview(expanding: id)
         }
@@ -878,6 +882,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             guard let self else { return }
             if let origin = self.sceneOrigin, self.spaces.contains(where: { $0 === origin.space }) {
                 if origin.space !== self.currentSpace { self.switchTo(origin.space, announce: false) }
+                if origin.home { return self.openHomeFromScene() }
                 if let tab = origin.tab, self.allTabs.contains(where: { $0 === tab }) { self.select(tab) }
             }
             self.closeOverview(expanding: self.activeTab?.id)
@@ -902,7 +907,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Contenu d'un espace pour la Scène : épinglés, onglets (ordre stable), puis archivés.
     private func sceneContent(for spaceID: UUID) -> SceneContent {
         let list = tabsBySpace[spaceID] ?? []
-        return SceneContent(pinned: list.filter(\.isPinned).map(card),
+        let homeCard = TabCard(id: SceneView.homeCardID, title: "Accueil", host: "Les tâches", url: nil,
+                               image: home.snapshot ?? HomePage.placeholder(), spaceColor: space(spaceID)?.color ?? Design.Palette.paper,
+                               isActive: homeVisible && spaceID == currentSpace.id)
+        return SceneContent(home: homeCard, pinned: list.filter(\.isPinned).map(card),
                             tabs: list.filter { !$0.isPinned }.map(card),
                             archived: archived.filter { $0.spaceID == spaceID }.map(card))
     }
@@ -912,16 +920,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         overviewOpening = true
         cancelSwitcher()
         if commandBar.isOpen { hideCommandBar() }
-        sceneOrigin = (currentSpace, activeTab)
+        sceneOrigin = (currentSpace, activeTab, homeVisible)
         Task { [weak self] in
             await self?.displayedTab?.captureSnapshot(timeout: .milliseconds(250))
             guard let self else { return }
-            // Sur l'accueil, la Scène montre l'accueil en grand.
-            let homeImage = self.homeVisible ? try? await self.home.webView.takeSnapshot(configuration: nil) : nil
+            // Sur l'accueil, la Scène montre l'accueil en grand, et sa vignette est choisie.
+            if self.homeVisible { await self.home.captureSnapshot() }
             self.overviewOpening = false
             self.overview.present(spaces: self.spaces.map { .init(id: $0.id, name: $0.name, color: $0.color) },
-                                  showing: self.currentSpace.id, activeTabID: self.activeTab?.id,
-                                  pageImage: homeImage ?? self.displayedTab?.snapshot)
+                                  showing: self.currentSpace.id,
+                                  activeTabID: self.homeVisible ? SceneView.homeCardID : self.activeTab?.id,
+                                  pageImage: self.homeVisible ? self.home.snapshot : self.displayedTab?.snapshot)
         }
     }
 
@@ -1318,9 +1327,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
     @objc func showHomeAction(_ sender: Any?) {
         if commandBar.isOpen { hideCommandBar() }
-        if !overview.isHidden { overview.isHidden = true }
+        if !overview.isHidden { return openHomeFromScene() }
         showHome()
         home.focusAddField()
+    }
+
+    /// Depuis la Scène : l'accueil passe sous la Scène, puis la Scène se referme dessus (sa vignette s'agrandit).
+    private func openHomeFromScene() {
+        showHome()
+        closeOverview(expanding: SceneView.homeCardID)
     }
     @objc func showOverviewAction(_ sender: Any?) {
         // Deuxième appui : comme Échap, retour à la page d'où l'on venait.

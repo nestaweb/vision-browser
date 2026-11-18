@@ -39,4 +39,14 @@ final class SceneLayoutTests: XCTestCase {
         XCTAssertEqual(SceneLayout.step(1, by: 1, count: 4), 2)
         XCTAssertEqual(SceneLayout.step(5, by: 0, count: 0), 0)
     }
+
+    /// L'accueil ouvre la rangée de chaque espace : ← jusqu'au début (ou fn+←) y mène.
+    @MainActor
+    func testHomeComesFirstInTheRow() {
+        let card = { (id: UUID, title: String) in TabCard(id: id, title: title, host: "", url: nil, image: nil, spaceColor: .gray) }
+        let content = SceneContent(home: card(SceneView.homeCardID, "Accueil"), pinned: [card(UUID(), "Épinglé")],
+                                   tabs: [card(UUID(), "Onglet")], archived: [card(UUID(), "Archivé")])
+        XCTAssertEqual(content.all.map(\.title), ["Accueil", "Épinglé", "Onglet", "Archivé"])
+        XCTAssertEqual(SceneContent().all.count, 0)
+    }
 }
