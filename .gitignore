@@ -7,12 +7,16 @@ DerivedData/
 *.xcodeproj/
 xcuserdata/
 
-# Builds Bitwarden téléchargés (non redistribués ici, récupérables depuis les versions officielles)
-prototypes/phase0/Extensions/
-
 # Vision Browser
 VisionBrowser/build/
 VisionBrowser/*.xcodeproj/
 
 # Images disque d'installation fabriquées par VisionBrowser/scripts/make-dmg.sh
 dist/
+
+# Documents de travail gardés en local (maquettes, prototype, notes, plan)
+maquette/
+prototypes/
+docs/
+tasks/
+PLAN.md

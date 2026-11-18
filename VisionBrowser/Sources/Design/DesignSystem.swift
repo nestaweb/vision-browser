@@ -1,7 +1,7 @@
 import AppKit
 import QuartzCore
 
-/// Jetons de la direction « Scène » (maquette : `maquette/scene.html`).
+/// Jetons de la direction « Scène ».
 ///
 /// Une seule source pour les couleurs, le texte et le mouvement : chaque surface les lit ici au lieu de choisir
 /// ses propres valeurs (avant : 10 rayons, 7 tailles de police, 3 durées, des couleurs système saturées).

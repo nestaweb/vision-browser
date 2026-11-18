@@ -10,28 +10,6 @@ Vision Browser starts from what made Arc pleasant to use and rethinks the rest:
 - **Bitwarden built in.** The extension runs through `WKWebExtension`, and each space can be linked to a Bitwarden folder.
 - **One command bar** (`Cmd+T`) for URLs, search, open tabs, history, favorites, clipboard history and Bitwarden items.
 
-## Status
-
-Early stage. Nothing here is ready for daily use yet.
-
-| Step | State |
-|---|---|
-| Product plan and tab navigation design | Done: [PLAN.md](PLAN.md), [interactive mockup](maquette/vues-onglets.html) |
-| Phase 0 prototype: isolated spaces + Bitwarden in WebKit | In progress: [prototypes/phase0](prototypes/phase0) |
-| Phase 1: the real app (full-window pages, tabs, address bar, domain indicator, Bitwarden) | Done: [VisionBrowser](VisionBrowser) |
-| Phase 2: `Cmd+T` command bar (open tabs, favorites, history with SQLite FTS5, search suggestions, commands) | Done |
-| Phase 3: isolated spaces (separate cookies per space, `Ctrl+1…9`, move a tab between spaces, per-site routing of external links) | Done |
-| Phase 4: tab navigation (recent-first `Ctrl+Tab`, bottom shelf, zoomed-out overview with site stacks and filtering, pinned tabs, tab sleep, auto-archive) | Done |
-| Phase 5: clipboard history (captured on copy and app activation only, never polled; passwords masked, memory-only, Touch ID, 10-minute expiry) | Done |
-| Phase 6: Bitwarden in `Cmd+T` through the official `bw` CLI (never `bw serve`): each account opens in its space (vault folder ↔ space) and is filled after Touch ID, multi-step forms, never auto-submitted | Done (to be tried on a real vault) |
-
-What phase 0 has verified so far:
-
-- A cookie set in one space is not visible in another.
-- The Bitwarden **Firefox** build (Manifest V2) loads and runs in `WKWebExtension`; the Chrome build (Manifest V3 service worker) does not start.
-- Bitwarden detects the browser from the user agent, so extension pages must present a Firefox user agent.
-- Passkeys (WebAuthn) require Apple's `com.apple.developer.web-browser.public-key-credential` entitlement.
-
 ## Building Vision Browser
 
 Requirements: macOS 26, Xcode 26, [XcodeGen](https://github.com/yonaskolb/XcodeGen), GitHub CLI.
@@ -46,34 +24,6 @@ open "build/Build/Products/Debug/Vision Browser.app"
 ```
 
 Shortcuts: `Cmd+T` new tab, `Cmd+L` address, `Ctrl+Tab` next tab, `Cmd+W` close, `Cmd+Shift+T` reopen, `Cmd+Shift+D` favorite, `Cmd+Shift+B` Bitwarden, `Cmd+Shift+L` autofill.
-
-## Building the phase 0 prototype
-
-Requirements: macOS 26, Xcode 26, [XcodeGen](https://github.com/yonaskolb/XcodeGen).
-
-```bash
-cd prototypes/phase0
-xcodegen generate
-xcodebuild -project VisionSpike.xcodeproj -scheme VisionSpike -derivedDataPath build build
-```
-
-Download `dist-firefox-<version>.zip` from the [Bitwarden releases](https://github.com/bitwarden/clients/releases) and unzip it into `prototypes/phase0/Extensions/bitwarden`, then apply the WebKit adaptation (inline menu protocol allowlist):
-
-```bash
-prototypes/phase0/scripts/patch-bitwarden.sh
-```
-
-```bash
-# Automated checks: space isolation and extension loading
-build/Build/Products/Debug/VisionSpike.app/Contents/MacOS/VisionSpike --selftest
-
-# Open the Bitwarden popup headlessly and print its console
-build/Build/Products/Debug/VisionSpike.app/Contents/MacOS/VisionSpike --diagnose-popup
-```
-
-## Language
-
-Planning documents (`PLAN.md`, `tasks/`, `docs/`) are written in French. Code and this README are in English.
 
 ## License
 

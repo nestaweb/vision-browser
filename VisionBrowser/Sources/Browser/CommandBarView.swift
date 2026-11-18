@@ -1,6 +1,6 @@
 import AppKit
 
-/// La barre `Cmd+T` (F4, direction « Scène », maquette `maquette/scene.html`).
+/// La barre `Cmd+T` (F4, direction « Scène »).
 ///
 /// Au centre, minimaliste : une feuille claire, une seule ombre, du texte. La ligne choisie s'inverse
 /// (papier sur encre) et le bloc glisse d'une ligne à l'autre.

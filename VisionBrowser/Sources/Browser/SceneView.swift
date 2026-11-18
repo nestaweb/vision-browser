@@ -8,7 +8,7 @@ struct SceneContent {
     var all: [TabCard] { pinned + tabs + archived }
 }
 
-/// Vue d'ensemble « Scène » (D3, maquette `maquette/scene.html`).
+/// Vue d'ensemble « Scène » (D3).
 ///
 /// La page recule sans disparaître ; la rangée des onglets de l'espace apparaît dessous ; les espaces sont sur un
 /// rail à gauche. Même rangement que les transitions de page : onglets à l'horizontale (← →), espaces à la
