@@ -80,12 +80,10 @@ enum MainMenu {
         main.addItem(submenu("Présentation", [
             item("Recharger la page", #selector(BrowserWindowController.reloadAction(_:)), "r"),
             .separator(),
-            // ⌘@ par défaut, réglable (Réglages > Raccourcis) : la touche sous Échap sur un clavier français, à une main,
-            // et libre dans macOS (⌘< change de fenêtre). Contrairement à Échap, elle marche aussi quand la page se sert
-            // de la touche (champ, vidéo, dialogue).
+            // Le seul accès à la Scène : ⌘@ par défaut, réglable (Réglages > Raccourcis). La touche sous Échap sur un
+            // clavier français, à une main, et libre dans macOS (⌘< change de fenêtre). Ni Échap, ni le bord bas, ni le
+            // pincement ne l'ouvrent : ils se déclenchaient sans le vouloir.
             overviewItem(),
-            alternate(#selector(BrowserWindowController.showOverviewAction(_:)), "o", [.command, .shift]),
-            alternate(#selector(BrowserWindowController.showOverviewAction(_:)), "\\", [.command, .shift]),
             .separator(),
             item("Zoom avant", #selector(BrowserWindowController.zoomInAction(_:)), "="),
             alternate(#selector(BrowserWindowController.zoomInAction(_:)), "+"),

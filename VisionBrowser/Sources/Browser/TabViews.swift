@@ -257,18 +257,3 @@ final class TabSwitcherView: NSVisualEffectView {
         }
     }
 }
-
-/// Bande invisible contre le bord bas : la souris qui s'y pose ouvre la Scène (vue d'ensemble).
-@MainActor
-final class BottomEdgeZone: NSView {
-    var onEnter: (() -> Void)?
-    var onExit: (() -> Void)?
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
-    }
-    override func mouseEntered(with event: NSEvent) { onEnter?() }
-    override func mouseExited(with event: NSEvent) { onExit?() }
-}

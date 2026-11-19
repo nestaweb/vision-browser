@@ -5,7 +5,7 @@ An open-source web browser for macOS, built with Swift and WebKit, with the pass
 Vision Browser starts from what made Arc pleasant to use and rethinks the rest:
 
 - **The page comes first.** The web page fills the whole window. No permanent toolbar or URL bar; the domain appears briefly when you land on a new site.
-- **A shelf and an overview instead of a sidebar.** Move the pointer to the bottom edge for your pinned and most recent tabs. Open the overview (`Cmd+@` by default, or pinch on the trackpad) to see every tab of the space, your spaces on a rail and your pinned tabs.
+- **An overview instead of a sidebar.** Press `Cmd+@` (adjustable in Settings) to see every tab of the space, your spaces on a rail and your pinned tabs. Nothing else opens it, so it never shows up by accident.
 - **Spaces with isolated data.** Each space has its own cookies and storage (`WKWebsiteDataStore`), so two accounts on the same site live side by side.
 - **A task list as the home page.** When a space has no open tab, its home page lists your tasks: projects and sub-projects, status, due date, subtasks and linked pages, stored on your Mac.
 - **Bitwarden built in.** The extension runs through `WKWebExtension`, and each space can be linked to a Bitwarden folder.

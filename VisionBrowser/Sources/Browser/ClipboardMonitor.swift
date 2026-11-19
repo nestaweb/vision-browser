@@ -178,8 +178,8 @@ final class CopyRelay: NSObject, WKScriptMessageHandler {
 
     static func install(on config: WKWebViewConfiguration) {
         let controller = config.userContentController
-        controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: EscapeRelay.world))
-        controller.add(shared, contentWorld: EscapeRelay.world, name: name)
+        controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: ScriptWorld.app))
+        controller.add(shared, contentWorld: ScriptWorld.app, name: name)
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

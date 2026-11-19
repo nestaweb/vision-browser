@@ -43,8 +43,6 @@ final class HomePage: NSObject, WKURLSchemeHandler, WKScriptMessageHandlerWithRe
         config.websiteDataStore = .nonPersistent()
         config.setURLSchemeHandler(self, forURLScheme: Self.scheme)
         config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "vision")
-        // Échap : même règle que sur les pages (la Scène s'ouvre si la page ne s'en sert pas, ex. champ actif).
-        EscapeRelay.install(on: config)
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = self
         view.setValue(false, forKey: "drawsBackground")

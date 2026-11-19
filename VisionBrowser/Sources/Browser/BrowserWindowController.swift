@@ -46,7 +46,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// Indicateur de chargement de la page affichée (le trait, au bord haut).
     private let loadingLine = LoadingLineView()
     private let trafficLightZone = TrafficLightZone()
-    private let bottomZone = BottomEdgeZone()
     /// Vue d'ensemble « Scène » (D3) : la page recule, rangée des onglets dessous, rail des espaces à gauche.
     private let overview = SceneView()
     /// Page affichée à l'ouverture de la Scène : Échap y ramène, même après avoir changé d'espace.
@@ -61,8 +60,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private var saveTask: Task<Void, Never>?
     private var maintenanceTask: Task<Void, Never>?
-    /// Attente sur le bord bas avant d'ouvrir la Scène (un passage vers le Dock ne l'ouvre pas).
-    private var bottomEdgeTask: Task<Void, Never>?
     private var monitors: [Any] = []
     /// Historique et favoris (phase 2) ; nil si la base ne s'ouvre pas : le navigateur reste utilisable.
     private let places = PlacesStore.openDefault()
@@ -73,7 +70,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var switcherTabs: [BrowserTab] = []
     private var switcherIndex = 0
     private var switcherShowTask: Task<Void, Never>?
-    private var pinchAccumulator: CGFloat = 0
     private var overviewOpening = false
     /// Ordre d'empilement des pages : la dernière affichée passe devant.
     private var pageLayerOrder = 0
@@ -142,19 +138,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// - Chiffres (⌘1…9, ⌘0, ⌃1…9) : reconnus par touche physique, voir `handleDigitShortcut`.
     /// - Ctrl+Tab : macOS traite Tab (navigation au clavier) avant tout raccourci de menu.
     /// - Relâcher Ctrl valide le sélecteur.
-    /// - Pincer pour dézoomer sur une page à 100 % ouvre la vue d'ensemble.
     private func installEventMonitors() {
         let keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self, event.window === self.window else { return event }
             let consumed = MainActor.assumeIsolated { self.handleKeyEvent(event) }
             return consumed ? nil : event
         }
-        let pinch = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
-            guard let self, event.window === self.window else { return event }
-            let consumed = MainActor.assumeIsolated { self.handlePagePinch(event) }
-            return consumed ? nil : event
-        }
-        monitors = [keys, pinch].compactMap { $0 }
+        monitors = [keys].compactMap { $0 }
     }
 
     private func buildInterface() {
@@ -168,7 +158,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         insecureStripe.isHidden = true
 
         // L'étiquette du haut passe au-dessus du voile de la barre Cmd+T (sinon elle paraît grisée).
-        for view in [pageContainer, loadingLine, dragStrip, insecureStripe, bottomZone, overview, switcher, veil, domainToast, commandBar,
+        for view in [pageContainer, loadingLine, dragStrip, insecureStripe, overview, switcher, veil, domainToast, commandBar,
                      trafficLightZone, popupAnchor] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -199,11 +189,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             insecureStripe.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             insecureStripe.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             insecureStripe.heightAnchor.constraint(equalToConstant: 3),
-
-            bottomZone.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            bottomZone.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            bottomZone.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            bottomZone.heightAnchor.constraint(equalToConstant: 4),
 
 
             overview.topAnchor.constraint(equalTo: content.topAnchor),
@@ -257,7 +242,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             self?.stepSpace(by: step)
         }
 
-        configureBottomEdge()
         configureOverview()
     }
 
@@ -827,34 +811,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Échap
 
-    /// Échap, quand ni la page ni un champ ne s'en est servi : ferme la surcouche ouverte, sinon ouvre la vue
-    /// d'ensemble, sauf si la page était occupée (champ en saisie, dialogue). Jamais de bip, jamais de sortie du plein écran.
+    /// Échap, quand ni la page ni un champ ne s'en est servi : referme la barre Cmd+T ou la Scène, sinon rien.
+    /// Il n'ouvre jamais la Scène (seul le raccourci réglable le fait). Jamais de bip, jamais de sortie du plein écran.
     private func handleEscape() {
         if commandBar.isOpen { return hideCommandBar() }
         // Même effet que dans la Scène : effacer le filtre, sinon revenir à la page d'avant.
         if !overview.isHidden { return overview.handleEscape() }
-        guard let view = displayedTab?.liveWebView ?? (homeVisible ? home.webView : nil) else { return showOverview() }
-        Task { [weak self] in
-            guard await !EscapeRelay.shared.pageIsBusy(view), let self,
-                  view === self.displayedTab?.liveWebView || (self.homeVisible && view === self.home.webView) else { return }
-            self.showOverview()
-        }
-    }
-
-    // MARK: Étagère du bas
-
-    /// La souris posée contre le bord bas ouvre la Scène (D6 : remplace l'étagère, qui faisait doublon avec la rangée).
-    private func configureBottomEdge() {
-        bottomZone.onEnter = { [weak self] in
-            self?.bottomEdgeTask?.cancel()
-            self?.bottomEdgeTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled, let self, self.overview.isHidden, !self.commandBar.isOpen,
-                      self.switcherTabs.isEmpty, self.window?.isKeyWindow == true else { return }
-                self.showOverview()
-            }
-        }
-        bottomZone.onExit = { [weak self] in self?.bottomEdgeTask?.cancel() }
     }
 
     // MARK: Vue d'ensemble
@@ -944,21 +906,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    /// Pincer pour dézoomer sur une page à taille réelle ouvre la vue d'ensemble (comme Safari).
-    private func handlePagePinch(_ event: NSEvent) -> Bool {
-        guard overview.isHidden, let view = displayedTab?.liveWebView, view.magnification <= 1.001 else { return false }
-        let point = view.convert(event.locationInWindow, from: nil)
-        guard view.bounds.contains(point) else { return false }
-        if event.phase == .began { pinchAccumulator = 0 }
-        guard event.magnification < 0 || pinchAccumulator < 0 else { return false }
-        pinchAccumulator += event.magnification
-        if pinchAccumulator < -0.1 {
-            pinchAccumulator = 0
-            showOverview()
-        }
-        if event.phase == .ended || event.phase == .cancelled { pinchAccumulator = 0 }
-        return true
-    }
 
     // MARK: Barre de commande (Cmd+T / Cmd+L)
 
@@ -1222,7 +1169,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let arguments: [String: Any] = ["username": fill.username ?? "", "password": fill.password ?? "",
                                         "site": tab.url?.host()?.lowercased() ?? "", "token": UUID().uuidString]
         Task { [weak self] in
-            let result = try? await view.callAsyncJavaScript(LoginFiller.script, arguments: arguments, contentWorld: EscapeRelay.world)
+            let result = try? await view.callAsyncJavaScript(LoginFiller.script, arguments: arguments, contentWorld: ScriptWorld.app)
             guard let self, (result as? String) == "filled", self.pendingFills[tab.id] != nil else { return }
             self.pendingFills[tab.id] = nil
             self.domainToast.show(text: "Rempli : \(fill.username ?? fill.item.name)", symbol: "checkmark.shield.fill", tint: .systemBlue,

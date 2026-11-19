@@ -155,7 +155,6 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
         // Les sites voient un navigateur WebKit standard (sinon certains servent une version dégradée).
         config.applicationNameForUserAgent = "Version/26.0 Safari/605.1.15"
         config.preferences.isElementFullscreenEnabled = true
-        EscapeRelay.install(on: config)
         CopyRelay.install(on: config)
         ExtensionDebugConsole.installIfEnabled(on: config)
         return config
