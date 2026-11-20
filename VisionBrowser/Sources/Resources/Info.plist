@@ -60,8 +60,14 @@
 		<key>NSAllowsArbitraryLoadsInWebContent</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Les sites que vous ouvrez peuvent vous demander la caméra (visio, photo de profil).</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Les sites que vous ouvrez peuvent vous demander le micro (visio, dictée, messages vocaux).</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Les sites qui proposent la dictée transcrivent votre voix avec la reconnaissance vocale de macOS.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>NSUserActivityTypeBrowsingWeb</string>

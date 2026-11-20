@@ -39,6 +39,11 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         LSApplicationCategoryType: public.app-category.productivity
+        # Sans ces phrases, WebKit cache le micro et la caméra aux pages (navigator.mediaDevices absent) et la dictée
+        # des sites (webkitSpeechRecognition) échoue. macOS les montre quand il demande l'autorisation, une fois.
+        NSMicrophoneUsageDescription: Les sites que vous ouvrez peuvent vous demander le micro (visio, dictée, messages vocaux).
+        NSCameraUsageDescription: Les sites que vous ouvrez peuvent vous demander la caméra (visio, photo de profil).
+        NSSpeechRecognitionUsageDescription: Les sites qui proposent la dictée transcrivent votre voix avec la reconnaissance vocale de macOS.
         # Permet à Vision Browser de devenir le navigateur par défaut.
         CFBundleURLTypes:
           - CFBundleURLName: Web site URL
