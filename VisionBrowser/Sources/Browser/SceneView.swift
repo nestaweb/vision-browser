@@ -299,10 +299,11 @@ final class SceneView: FlippedView {
     }
 
     /// Montre un autre espace : la rangée et la page glissent à la verticale, comme le rail.
-    func show(space id: UUID) {
+    /// - Parameter direction: sens du glissement (1 vers le bas) ; par défaut, celui de la position sur le rail.
+    func show(space id: UUID, direction forced: CGFloat? = nil) {
         guard id != shownSpaceID, let to = spaces.firstIndex(where: { $0.id == id }) else { return }
         let from = spaces.firstIndex { $0.id == shownSpaceID } ?? to
-        let direction: CGFloat = to > from ? 1 : -1
+        let direction: CGFloat = forced ?? (to > from ? 1 : -1)
         shownSpaceID = id
         content = contentProvider?(id) ?? SceneContent()
         selected = cards.firstIndex(where: \.isActive) ?? 0
@@ -331,10 +332,11 @@ final class SceneView: FlippedView {
 
     private func goSpace(by step: Int) {
         guard let current = spaces.firstIndex(where: { $0.id == shownSpaceID }) else { return }
-        let next = SceneLayout.step(current, by: step, count: spaces.count)
+        // En boucle, comme ⇧← ⇧→ : depuis le dernier espace, ↓ revient au premier (et la rangée glisse dans le sens de la flèche).
+        let next = SceneLayout.cycle(current, by: step, count: spaces.count)
         guard next != current else { return }
         onShowSpace?(spaces[next].id)
-        show(space: spaces[next].id)
+        show(space: spaces[next].id, direction: step > 0 ? 1 : -1)
     }
 
     private func image(of id: UUID?) -> NSImage? { cards.first { $0.id == id }?.image }

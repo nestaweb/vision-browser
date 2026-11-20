@@ -68,4 +68,10 @@ struct SceneLayout: Equatable {
         guard count > 0 else { return 0 }
         return min(max(index + delta, 0), count - 1)
     }
+
+    /// Comme `step`, mais en boucle : après le dernier, le premier (espaces, comme ⇧← ⇧→).
+    static func cycle(_ index: Int, by delta: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return ((index + delta) % count + count) % count
+    }
 }

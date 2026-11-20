@@ -38,6 +38,12 @@ final class SceneLayoutTests: XCTestCase {
         XCTAssertEqual(SceneLayout.step(3, by: 1, count: 4), 3)
         XCTAssertEqual(SceneLayout.step(1, by: 1, count: 4), 2)
         XCTAssertEqual(SceneLayout.step(5, by: 0, count: 0), 0)
+        // Espaces : en boucle.
+        XCTAssertEqual(SceneLayout.cycle(3, by: 1, count: 4), 0)
+        XCTAssertEqual(SceneLayout.cycle(0, by: -1, count: 4), 3)
+        XCTAssertEqual(SceneLayout.cycle(1, by: 1, count: 4), 2)
+        XCTAssertEqual(SceneLayout.cycle(0, by: 1, count: 1), 0)
+        XCTAssertEqual(SceneLayout.cycle(0, by: 1, count: 0), 0)
     }
 
     /// L'accueil ouvre la rangée de chaque espace : ← jusqu'au début (ou fn+←) y mène.
