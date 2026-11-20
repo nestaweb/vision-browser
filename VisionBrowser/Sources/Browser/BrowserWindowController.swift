@@ -587,14 +587,29 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         host.controller.didCloseTab(tab, windowIsClosing: false)
         tab.liveWebView?.removeFromSuperview()
         if displayedTab === tab { displayedTab = nil }
-        if activeBySpace[spaceID] === tab {
-            activeBySpace[spaceID] = TabOrganizer.recentFirst(list.map(info)).first.flatMap { info in list.first { $0.id == info.id } }
-            if tab.space === currentSpace {
-                if let next = activeBySpace[spaceID] { display(next, announce: true) }
-                else { showHome() }
-            }
-        }
+        handOff(from: tab, to: list)
         scheduleSessionSave()
+    }
+
+    /// ⌘W, ou × sur une carte : un onglet épinglé reste dans les épinglés et seule sa page se ferme (elle rouvrira
+    /// sur son adresse épinglée) ; tout autre onglet est fermé.
+    func closeFromUser(_ tab: BrowserTab) {
+        guard tab.isPinned else { return close(tab) }
+        if displayedTab === tab { displayedTab = nil }
+        tab.unload()
+        handOff(from: tab, to: (tabsBySpace[tab.space.id] ?? []).filter { $0 !== tab })
+        scheduleSessionSave()
+    }
+
+    /// L'onglet actif de son espace vient d'être fermé : le plus récent des onglets encore ouverts prend la main,
+    /// sinon l'accueil. Un épinglé endormi n'est pas « ouvert » : on ne rouvre pas une page que l'on vient de fermer.
+    private func handOff(from tab: BrowserTab, to candidates: [BrowserTab]) {
+        let spaceID = tab.space.id
+        guard activeBySpace[spaceID] === tab else { return }
+        let open = candidates.filter { !($0.isPinned && $0.isAsleep) }
+        activeBySpace[spaceID] = TabOrganizer.recentFirst(open.map(info)).first.flatMap { info in open.first { $0.id == info.id } }
+        guard tab.space === currentSpace else { return }
+        if let next = activeBySpace[spaceID] { display(next, announce: true) } else { showHome() }
     }
 
     func index(of tab: BrowserTab) -> Int { allTabs.firstIndex { $0 === tab } ?? 0 }
@@ -858,7 +873,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         overview.onCloseTab = { [weak self] id in
             guard let self, let tab = self.tab(id) else { return }
-            self.close(tab)
+            self.closeFromUser(tab)
             self.overview.reload()
         }
         overview.onShowSpace = { [weak self] id in
@@ -1297,10 +1312,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func closeTabAction(_ sender: Any?) {
         if commandBar.isOpen { return hideCommandBar() }
         if !overview.isHidden {
-            if let tab = targetTab { close(tab); overview.reload() }
+            if let tab = targetTab { closeFromUser(tab); overview.reload() }
             return
         }
-        if let activeTab { close(activeTab) }
+        if let activeTab { closeFromUser(activeTab) }
     }
     @objc func reopenClosedTabAction(_ sender: Any?) {
         guard let last = closedTabs.popLast() else { return }

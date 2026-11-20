@@ -37,6 +37,14 @@ final class SnapshotStore {
         }
     }
 
+    /// Oublie la capture d'un onglet dont la page a changé sans être affichée (elle montrerait l'ancienne page).
+    func forget(_ id: UUID) {
+        cache[id] = nil
+        missing.insert(id)
+        let url = fileURL(id)
+        Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: url) }
+    }
+
     /// Supprime les captures des onglets qui n'existent plus (ni ouverts, ni archivés).
     func prune(keeping ids: Set<UUID>) {
         cache = cache.filter { ids.contains($0.key) }

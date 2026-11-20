@@ -135,7 +135,7 @@ defaults delete app.visionbrowser.browser
 | Home page (tasks) | `Cmd+Shift+H` |
 | Next / previous tab (most recent first) | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Go to tab 1 to 9 | `Cmd+1` … `Cmd+9` |
-| Close tab / reopen closed tab | `Cmd+W` / `Cmd+Shift+T` |
+| Close tab (a pinned tab stays pinned and reopens on its pinned page) / reopen closed tab | `Cmd+W` / `Cmd+Shift+T` |
 | Pin tab / add to favorites | `Cmd+D` / `Cmd+Shift+D` |
 | Go to space 1 to 9 | `Ctrl+1` … `Ctrl+9` |
 | Previous / next space | `Shift+←` / `Shift+→` |

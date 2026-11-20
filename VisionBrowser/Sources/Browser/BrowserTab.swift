@@ -175,6 +175,27 @@ final class BrowserTab: NSObject, WKWebExtensionTab, WKNavigationDelegate, WKUID
         liveWebView = nil
     }
 
+    /// Ferme la page sans retirer l'onglet (⌘W sur un épinglé) : vue relâchée, historique oublié, et l'onglet
+    /// rouvrira sur son adresse épinglée.
+    func unload() {
+        settleHTTPS()
+        if let view = liveWebView {
+            observations = []
+            view.stopLoading()
+            view.navigationDelegate = nil
+            view.uiDelegate = nil
+            view.removeFromSuperview()
+            liveWebView = nil
+        }
+        savedInteractionState = nil
+        if let homeURL, homeURL != url {
+            previousURL = url
+            url = homeURL
+            title = nil
+            SnapshotStore.shared.forget(id)
+        }
+    }
+
     /// Capture avec délai maximal : si WebKit ne répond pas (fenêtre cachée), on continue sans attendre.
     func captureSnapshot(timeout: Duration) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
