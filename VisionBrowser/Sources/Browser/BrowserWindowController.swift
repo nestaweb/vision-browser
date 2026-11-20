@@ -1040,11 +1040,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case .clipboard(let id, _, _):
             useClipboardItem(id, copyOnly: mode == .copy)
         case .bitwarden(let id, _):
-            switch mode {
-            case .copy: if let item = BitwardenService.shared.vault.items.first(where: { $0.id == id }) { copyBitwardenPassword(item) }
-            case .otherTab: useBitwardenItem(id, here: true, inNewTab: inNewTab)
-            case .normal: useBitwardenItem(id, here: false, inNewTab: true)
-            }
+            // Clic, ↩ ou ⌥↩ : copier le mot de passe (Touch ID). ⌘↩ : remplir la page, dans l'espace affiché.
+            if mode == .otherTab { useBitwardenItem(id, inNewTab: inNewTab) }
+            else if let item = BitwardenService.shared.vault.items.first(where: { $0.id == id }) { copyBitwardenPassword(item) }
         case .command(.unlockBitwarden):
             unlockBitwardenAction(nil)
         case .command(.lockBitwarden):
@@ -1101,11 +1099,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Bitwarden (CLI)
 
-    /// Remplit un identifiant. Touch ID d'abord.
-    /// - Parameter here: ⌘↩ : dans l'espace affiché (onglet actuel, ou nouvel onglet si `inNewTab` ou espace vide) ;
-    ///   la page actuelle n'est pas rechargée si elle est déjà sur le bon site. Sinon (↩) : nouvel onglet dans
-    ///   l'espace relié à l'identifiant (dossier Bitwarden, règle de routage).
-    private func useBitwardenItem(_ id: String, here: Bool, inNewTab: Bool) {
+    /// Remplit un identifiant (⌘↩), dans l'espace affiché : l'onglet actuel, ou un nouvel onglet si `inNewTab` ou
+    /// espace vide. La page actuelle n'est pas rechargée si elle est déjà sur le bon site. Touch ID d'abord.
+    private func useBitwardenItem(_ id: String, inNewTab: Bool) {
         let service = BitwardenService.shared
         guard let item = service.vault.items.first(where: { $0.id == id }) else { return }
         guard let url = item.loginURL else {
@@ -1113,12 +1109,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         // 1. La page s'ouvre tout de suite et charge pendant Touch ID et la lecture du mot de passe.
         let tab: BrowserTab
-        if here, !inNewTab, let current = activeTab {
+        if !inNewTab, let current = activeTab {
             tab = current
             if !BitwardenVault.pageMatches(current.url, item: item) { current.webView.load(URLRequest(url: url)) }
         } else {
-            let space = here ? currentSpace : (service.vault.spaceID(for: item, config: config).flatMap(self.space) ?? currentSpace)
-            tab = newTab(url: url, in: space, activate: true)
+            tab = newTab(url: url, in: currentSpace, activate: true)
         }
         pendingFills[tab.id] = PendingFill(item: item, username: nil, password: nil, expires: Date().addingTimeInterval(180))
         Task { [weak self] in

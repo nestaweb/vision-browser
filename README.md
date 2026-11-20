@@ -69,7 +69,7 @@ Vision Browser works without Bitwarden. Two separate pieces add it, and you can 
 | Piece | What it gives you |
 |---|---|
 | The Bitwarden **extension** | The usual Bitwarden popup and autofill inside web pages (`Cmd+Shift+B`). |
-| The Bitwarden **CLI** (`bw`) | Your vault items in the `Cmd+T` command bar, filled into the page after Touch ID, never submitted automatically. |
+| The Bitwarden **CLI** (`bw`) | Your vault items in the `Cmd+T` command bar. Click a row or press Return to copy its password after Touch ID (cleared from the clipboard after 90 seconds); `Cmd+Return` fills the page instead, never submitted automatically. |
 
 **The extension.** It is not bundled with the app: an install script downloads the official Bitwarden Firefox build from Bitwarden's GitHub releases, checks its SHA-256 fingerprint and applies a small WebKit adaptation. The script needs the [GitHub CLI](https://cli.github.com), signed in:
 

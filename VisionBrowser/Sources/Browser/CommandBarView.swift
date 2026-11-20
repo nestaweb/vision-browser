@@ -20,9 +20,9 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
 
     /// Façon de valider le résultat choisi.
     enum Submit {
-        /// Entrée : action normale (ouvrir, basculer, remplir…).
+        /// Entrée ou clic : action normale (ouvrir, basculer, copier le mot de passe d'une ligne Bitwarden…).
         case normal
-        /// Cmd+Entrée : l'autre onglet (onglet actuel depuis Cmd+T, nouvel onglet depuis Cmd+L).
+        /// Cmd+Entrée : l'autre onglet (onglet actuel depuis Cmd+T, nouvel onglet depuis Cmd+L) ; remplir pour Bitwarden.
         case otherTab
         /// Option+Entrée : copier (mot de passe Bitwarden, élément du presse-papier, adresse).
         case copy
@@ -279,6 +279,7 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
         else { highlight.frame = frame }
         reveal(index, animated: animated)
         updateCounter()
+        footer.attributedStringValue = Self.footerText(newTab: isNewTab, for: results[index])
     }
 
     /// Ligne dans la liste (repère de la liste défilante).
@@ -365,10 +366,18 @@ final class CommandBarView: NSView, NSTextFieldDelegate {
         onExecute?(chosen, query, mode)
     }
 
-    private static func footerText(newTab: Bool) -> NSAttributedString {
-        let entries: [(String, String)] = newTab
+    /// Touches du bas de la barre ; une ligne Bitwarden a les siennes (↩ copie, ⌘↩ remplit).
+    static func footerEntries(newTab: Bool, for result: CommandResult? = nil) -> [(String, String)] {
+        if case .bitwarden? = result?.kind {
+            return [("↩", "copier le mot de passe"), ("⌘↩", "remplir la page"), ("Échap", "fermer")]
+        }
+        return newTab
             ? [("↩", "ouvrir"), ("⌘↩", "onglet actuel"), ("⌥↩", "copier"), ("Échap", "fermer")]
             : [("↩", "ouvrir ici"), ("⌘↩", "nouvel onglet"), ("⌥↩", "copier"), ("Échap", "fermer")]
+    }
+
+    private static func footerText(newTab: Bool, for result: CommandResult? = nil) -> NSAttributedString {
+        let entries = footerEntries(newTab: newTab, for: result)
         let text = NSMutableAttributedString()
         for (index, (key, label)) in entries.enumerated() {
             if index > 0 { text.append(NSAttributedString(string: "    ")) }
