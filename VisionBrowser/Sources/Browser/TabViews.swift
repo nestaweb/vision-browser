@@ -206,11 +206,16 @@ final class TabCardView: FlippedView, NSDraggingSource {
 }
 
 /// Sélecteur `Ctrl+Tab` : les onglets de l'espace par ordre d'utilisation récente.
+/// À la souris : survoler une carte la choisit (relâcher Ctrl l'ouvre), cliquer l'ouvre tout de suite.
 @MainActor
 final class TabSwitcherView: NSVisualEffectView {
     private var cardViews: [TabCardView] = []
     private(set) var selected = 0
     private let cardSize = NSSize(width: 190, height: 150)
+    /// Carte survolée : elle devient la sélection.
+    var onHover: ((Int) -> Void)?
+    /// Carte cliquée : l'onglet s'ouvre.
+    var onPick: ((Int) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -237,6 +242,37 @@ final class TabSwitcherView: NSVisualEffectView {
         selected = (index % cardViews.count + cardViews.count) % cardViews.count
         for (i, view) in cardViews.enumerated() { view.isFocused = i == selected }
         needsLayout = true
+    }
+
+    // MARK: Souris
+
+    /// Le sélecteur reçoit lui-même les clics : Ctrl est tenu pendant qu'il est ouvert, et un Ctrl+clic arriverait
+    /// sur une carte comme un clic droit.
+    override func hitTest(_ point: NSPoint) -> NSView? { !isHidden && frame.contains(point) ? self : nil }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { pick(event) }
+    override func rightMouseDown(with event: NSEvent) { pick(event) }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard let index = cardIndex(at: event), index != selected else { return }
+        select(index)
+        onHover?(index)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    private func pick(_ event: NSEvent) {
+        guard let index = cardIndex(at: event) else { return }
+        onPick?(index)
+    }
+
+    private func cardIndex(at event: NSEvent) -> Int? {
+        let point = convert(event.locationInWindow, from: nil)
+        return cardViews.indices.first { !cardViews[$0].isHidden && cardViews[$0].frame.contains(point) }
     }
 
     /// Taille voulue : au plus la largeur de la fenêtre, les cartes au-delà défilent autour de la sélection.

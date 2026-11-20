@@ -243,6 +243,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
 
         configureOverview()
+        configureSwitcher()
     }
 
     private func setTrafficLightsVisible(_ visible: Bool) {
@@ -809,6 +810,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             let size = self.switcher.preferredSize(maxWidth: (self.window?.contentView?.bounds.width ?? 800) - 80)
             self.switcherWidth?.constant = size.width
             self.switcherHeight?.constant = size.height
+        }
+    }
+
+    private func configureSwitcher() {
+        switcher.onHover = { [weak self] index in self?.switcherIndex = index }
+        switcher.onPick = { [weak self] index in
+            guard let self, self.switcherTabs.indices.contains(index) else { return }
+            self.switcherIndex = index
+            self.commitSwitcher()
         }
     }
 
